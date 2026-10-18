@@ -1,0 +1,4 @@
+ci: pass
+commit: 69378a3d34e9dd2d9a18ef49b4b7a2524bcb9af6
+ran: 2026-10-18T15:08:21Z
+gate: make release-check (SQLite and PostgreSQL)
