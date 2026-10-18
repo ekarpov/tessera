@@ -10,3 +10,11 @@ New composed HTTP ownership scenarios: synthetic SQLite; broad gate also exercis
 Independent Swift and Voptrack actual-image gate: not rerun.
 No migration guarantee. Existing installation bindings are not automatically repaired.
 Evidence: .ci/69378a3d34e9dd2d9a18ef49b4b7a2524bcb9af6/
+
+Published tag: v0.1.0-alpha.39
+Commit: 69378a3d34e9dd2d9a18ef49b4b7a2524bcb9af6
+Annotated tag object: bf449d4ae1869a0ced1c76447807130a3d12594f
+Remote dev and peeled tag: verified exact match.
+Published-tag Go module checksum: h1:52UvSM9jRplqNbT2lLT2e6xBImjyF7D6lZE28faLp/A=
+Published-tag installation and synthetic loopback discovery: both report v0.1.0-alpha.39.
+No deployments or consumer pins changed. Independent Swift and Voptrack image gate not rerun.
