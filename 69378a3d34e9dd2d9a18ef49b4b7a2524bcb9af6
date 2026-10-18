@@ -2,3 +2,11 @@ ci: pass
 commit: 69378a3d34e9dd2d9a18ef49b4b7a2524bcb9af6
 ran: 2026-10-18T15:08:21Z
 gate: make release-check (SQLite and PostgreSQL)
+
+Direct review: no blocking findings in guidance, implementation, regressions or contract/release notes.
+Clean-commit make integration, make integration-auth and make faults: pass.
+Committed-source old-selection negative control: expected deterministic missing-owner failure.
+New composed HTTP ownership scenarios: synthetic SQLite; broad gate also exercises PostgreSQL.
+Independent Swift and Voptrack actual-image gate: not rerun.
+No migration guarantee. Existing installation bindings are not automatically repaired.
+Evidence: .ci/69378a3d34e9dd2d9a18ef49b4b7a2524bcb9af6/
