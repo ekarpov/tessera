@@ -2,3 +2,11 @@ ci: pass
 commit: b5ff5072e8a4b3ebcaf88a4cedd402b9bc893aa0
 ran: 2026-11-03T18:58:55Z
 gate: make release-check (SQLite and PostgreSQL)
+
+Guidance integration for rc.2:
+Independent read-only review: no actionable findings; requirements preserved.
+Skill metadata validator, guidance/document links and whitespace: PASS.
+Runtime code, dependencies, protocols, vectors and build/test configuration are
+unchanged from rc.1. Earlier runtime-specific checks retain their original scope.
+Candidate binary version verified: v0.1.0-rc.2.
+Published rc.1 remains immutable. Independent consumer acceptance is still pending.
