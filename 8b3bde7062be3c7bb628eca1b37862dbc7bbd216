@@ -2,3 +2,18 @@ ci: pass
 commit: 8b3bde7062be3c7bb628eca1b37862dbc7bbd216
 ran: 2026-11-03T18:45:31Z
 gate: make release-check (SQLite and PostgreSQL)
+
+First-release slice:
+Independent review completed; no blocking correctness/security findings.
+Reviewer's test citation correction was applied before this final clean gate.
+Precommit release-check (two required disposable PostgreSQL databases),
+integration, integration-auth, faults, Python verifier (4), scheduler/retention
+race repeats (10), batch-expiry race repeats (20), backup measurement: PASS.
+Ten compiling defects caught; sources restored exactly. Frozen vectors unchanged
+since alpha.28. Document checks: PASS. Candidate binary reports v0.1.0-rc.1.
+Earlier anchor failure at 51bbdb74ccbe1370e8543c155ac095a043e84dc5 is retained
+locally and is not counted as pass. Superseded citation-only run 287ce17 was
+terminated and its disposable resources cleaned up.
+Evidence: .ci/release-slice/ and .ci/8b3bde7062be3c7bb628eca1b37862dbc7bbd216/.
+Independent consumer/device/server-team backup/recovery acceptance is pending.
+No real-data/cloud/separate-host recovery acceptance or complete privacy audit.
