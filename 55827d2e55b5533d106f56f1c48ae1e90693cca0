@@ -2,3 +2,20 @@ ci: pass
 commit: 55827d2e55b5533d106f56f1c48ae1e90693cca0
 ran: 2026-11-04T20:00:07Z
 gate: make release-check (SQLite and PostgreSQL)
+
+OAuth completion qualification evidence, 2026-11-04:
+- Final make browser-auth: PASS, real Linux headless WebKit 26.0 build 2248,
+  Playwright 1.58.0; CSP negative control, custom-scheme completion,
+  duplicate-submit recovery and fresh sign-in. No iOS app dispatch claim.
+- Final make integration, integration-auth, faults: PASS, synthetic data only.
+- Concurrent/conflicting consent and cancellation-after-engine-commit regressions: PASS.
+- Defect seeds original-redirect and missing-recovery compiled and were detected;
+  originals restored byte for byte.
+- Local tagged-module installation built from git archive v0.1.0-rc.3 through
+  file GOPROXY reports exactly v0.1.0-rc.3.
+- Candidate is local only: remote push was rejected by automatic approval review
+  pending explicit authorization for publication to github.com/ekarpov/tessera.
+- Independent consumer/device acceptance remains pending; rc.2 Debug simulator
+  workaround evidence does not qualify this permanent fix.
+Logs: .ci/oauth-completion/{browser-final,integration-final,tag-install}.log,
+.ci/oauth-completion/seed-*.log and the clean-commit CI evidence above.
