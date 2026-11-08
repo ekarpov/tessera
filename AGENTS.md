@@ -20,6 +20,7 @@ first (`rg -n '^#{1,4} ' path`), then read the relevant section and enough conte
 | Action | Guidance |
 | --- | --- |
 | Change protocol | Normative [record](specs/tessera-protocol-v1.md) / [content](specs/tessera-content-v1.md) contracts (version independently); first check [contribution rules](CONTRIBUTING.md#the-specification-is-the-contract) and [decisions](docs/asked-and-answered.md) |
+| Public commits and pull requests | [Contribution workflow](CONTRIBUTING.md#public-development-workflow) |
 | Agent setup / architecture / extension / deployment | [Agent guides](.agents/guides/README.md) |
 | Build/review Go server | [Storage skill](.agents/skills/go-storage-service/SKILL.md) |
 | Run repository shell tools on Windows | [WSL workflow](.agents/skills/go-storage-service/references/operations.md#windows-shell) |
@@ -69,6 +70,21 @@ expected return format. Reuse workers for follow-up fixes; prefer completion not
 waits to frequent polling. Preserve required independent review and consumer gates. Before any shared deployment action,
 check the [active freeze and upgrade rules](docs/releasing.md#app-review-freeze). Preparing a release
 does not authorize deployment or modification of review accounts/invitations.
+
+## Public development
+
+Treat commits, branches, PRs, issues, reviews, attachments and release notes as public.
+Follow the [contribution workflow](CONTRIBUTING.md#public-development-workflow) for branches,
+commit scope, review and merge policy. Start from current `main`; never merge or push archived
+private development history back into the public repository. Keep operator credentials,
+deployment addresses and unsanitized qualification evidence in protected storage.
+
+Within the requested scope, prepare focused commits, run the applicable checks and open a PR.
+Use a draft for substantial unfinished work and mark a completed change ready for review.
+Opening a PR does not authorize merging it. Merge only within the maintainer's authorization;
+release tagging, publication and deployment retain their separate
+[release rules](docs/releasing.md). Do not change repository protection settings as part of
+an ordinary code or documentation PR.
 
 ## Working context
 
