@@ -6,9 +6,11 @@ conformance suite and a Go reference server with SQLite and PostgreSQL engines.
 Applications define their own vocabulary and workflows; Tessera stores their data without
 interpreting its meaning.
 
-**Status:** `v0.1.0-rc.4` is a release candidate. Final release acceptance is pending;
-see the [app and server acceptance checklist](docs/rc.4-acceptance-checklist.md).
-A passing backend test suite is not independent client acceptance or a conformance certificate.
+**Status:** [v0.1.0](https://github.com/ekarpov/tessera/releases/tag/v0.1.0) is released.
+See the [release notes](docs/v0.1.0-release-notes.md) for qualification results, operator
+limits and the explicitly waived client tests. Independent client sign-off remains pending;
+a passing backend suite is not a conformance certificate. Start with fresh storage:
+pre-release storage is unsupported.
 
 ## Quick start
 
