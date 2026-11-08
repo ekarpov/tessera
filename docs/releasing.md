@@ -1,27 +1,26 @@
 # Releasing
 
 A release identifies verified code, states its limits and gives operators a recovery path.
-`v0.1.0-rc.4` is the current tagged candidate. Independent consumer and server evidence
-and explicit maintainer decisions govern the final release; the scoped first-release
-app-test waiver is recorded under [preconditions](#preconditions). Backend checks alone
-do not authorize the final release.
+`v0.1.0` is released; its [release notes](v0.1.0-release-notes.md) record acceptance and limits.
+The first-release [replacement handoff](v0.1.0-s08-acceptance-handoff.md) and earlier
+[base handoff](v0.1.0-acceptance-handoff.md) retain historical case bodies and evidence scope.
+For each subsequent release, prepare a new qualification packet for its exact revision;
+old passes and first-release waivers do not qualify a new release.
 
-Draft [v0.1.0 release notes](v0.1.0-release-notes.md) describe the current compatibility
-changes and the qualification packet still owed. They are not an acceptance record.
-Use the [928c09a S08 replacement acceptance handoff](v0.1.0-s08-acceptance-handoff.md)
-for the current CI runtime, candidate-specific app/server checks and evidence requirements.
-The earlier [c46beb0 handoff](v0.1.0-acceptance-handoff.md) retains the base case bodies.
+Development follows the [public PR workflow](../CONTRIBUTING.md#public-development-workflow).
+A merged PR, release tag or published release never authorizes deployment by itself.
 
 ## Quick guide
 
 1. Confirm the exact candidate commit, client revisions and clean working tree.
-2. Complete the [preconditions](#preconditions) and [rc.4 acceptance checklist](rc.4-acceptance-checklist.md).
+2. Complete the [preconditions](#preconditions) and the candidate-specific acceptance packet.
+   The [rc.4 checklist](rc.4-acceptance-checklist.md) remains historical evidence for that candidate.
 3. Obtain explicit maintainer approval for protected release/publication actions.
-4. Follow [cutting it](#cutting-it), then verify installation and discovery from the tag.
+4. Follow [cutting it](#cutting-it): gate the exact final commit, then tag, publish and
+   verify installation and discovery within the approved scope.
 
 Do not create, move or push a tag merely because documentation or acceptance preparation
-is complete. Existing candidate tags stay unchanged unless the maintainer explicitly
-instructs otherwise.
+is complete. Published tags are immutable; fixes receive a new version.
 
 ## App Review freeze
 
@@ -123,24 +122,29 @@ The [operations guide](../.agents/skills/go-storage-service/references/operation
 owns local and shared-host CI commands. Keep full logs in protected run storage or attached
 to the relevant commit/review. Do not add a second historical status document to the tree.
 
-## Before the first public release
+## Public refs and release evidence
 
-`main` carries releases; development happens on `dev`. The first release is prepared on
-`release/v0.1.0` and reaches `main` through one approved, squashed pull request. Do not
-fast-forward development history into the public release.
+`main` carries the releasable public history. Changes reach it through reviewed topic PRs,
+with squash merging as the default. Do not restore the former private development branches,
+merge archived private ancestry or push private bundles, backup refs or operator notes.
 
-1. Scan the final tree and intended public refs for private client names, hostnames,
-   addresses, key material and credentials. Record scope and results in the release review;
-   an earlier scan is not a guarantee about the final commit.
-2. Development commit and annotated tag messages still contain private names. Preserve
-   a private copy of the history and the removed translations at a maintainer-approved
-   destination before deleting refs.
-3. Have every consumer move its pre-release pin to `v0.1.0` and confirm before deleting
-   any pre-release tag. Private Go modules stop resolving a deleted tag.
-4. Obtain explicit approval before merging, tagging `v0.1.0`, deleting `dev` or any alpha/rc
-   tag, or making the repository public.
+1. Review the final tree, commit/tag messages and intended public refs for private client
+   names, deployment addresses, key material and credentials. Record scan scope, reviewed
+   exceptions and results in the release review. An earlier scan does not qualify new changes.
+2. Keep full operational logs, client revision/configuration details that are private and
+   unsanitized evidence in protected storage. Publish only reviewed summaries and artifacts;
+   public CI output and PR attachments need the same review as committed files.
+3. Before deleting historical refs, preserve private history and any removed material at a
+   maintainer-approved private destination. Obtain consumer pin migration confirmation before
+   removing a version consumers may still resolve. Cleanup does not authorize changing a
+   running deployment or deleting its evidence.
+4. Obtain maintainer authorization for merging, tagging, publication, historical-ref deletion
+   or repository visibility changes. Ordinary topic-branch deletion after merge follows the
+   contribution workflow. Existing authorization remains valid within its stated scope.
 
-Removing historical documentation does not remove private material from Git history.
+Deleting a ref does not guarantee removal of its objects or cached views from a hosting
+service. Assess retained history before a visibility change. Public tag immutability and
+private-history custody remain separate from local worktree cleanup.
 
 ## Versions
 
@@ -161,8 +165,8 @@ from the installed tag after publication. `release.Released` distinguishes pseud
 
 Pre-releases let consumers pin a fixed version and carry no migration guarantee. Candidate
 tag messages must state exact checked revisions, completed gates and unmet acceptance.
-First-release candidates use `release/v0.1.0`; creating another candidate requires explicit
-authorization. Never retarget an existing tag to a fix.
+Prepare candidates through topic PRs from `main`; creating or publishing a candidate tag
+requires maintainer authorization. Never retarget an existing tag to a fix.
 
 **Final `v0.1.0` starts from fresh storage.** Pre-release databases, identity registries and
 content directories are unsupported inputs even if forward migrations happen to open them.
@@ -171,14 +175,31 @@ format versions and rejection of unsupported state remain necessary.
 
 ## Cutting it
 
-After the preconditions and approval, squash the release pull request onto `main` and tag
-that commit with an annotated `v0.1.0` tag. Record exact gates, consumer revision pairs,
-backup limits and remaining qualifications. Compare vectors against `v0.1.0-alpha.28`;
-report additions explicitly and never alter existing cases.
+1. Complete candidate qualification and review the release PR under the public contribution
+   workflow. Confirm maintainer authorization covers the intended merge, tag and publication.
+   Squash merge by default; the resulting commit on `main` is the release candidate.
+2. Check out that exact commit with a clean tree and run the full committed-candidate gate
+   and integration/authentication/fault checks in [preconditions](#preconditions). Record its
+   SHA, build information, binary digest and outcomes. Pre-merge checks on another SHA do not
+   replace this gate. If a fix changes the candidate, review it and qualify the new commit
+   before tagging; do not move a tag to the fix.
+3. Complete any acceptance still owed for that exact candidate and record client revision
+   pairs, scoped qualifications and operator recovery limits. Compare the specification and
+   vectors against the last consumer-accepted release; report additions explicitly and never
+   alter retained vector cases. The first v0.1.0 also retained its alpha.28 comparison audit;
+   evidence does not depend on restoring deleted pre-release tags to the public repository.
+4. Within the authorized scope, create an annotated version tag on the verified SHA and
+   publish release notes with exact gate results, acceptance limits, migration requirements
+   and remaining qualifications. Review all public text and attachments before uploading.
+   Do not rewrite a published release tag; later documentation corrections may advance `main`
+   without changing which commit was released.
+5. Verify module installation from the published tag, `tesserad -version` and discovery using
+   disposable synthetic storage. A checkout pseudo-version does not prove tagged installation.
+   Record the outcome and give consumers the final commit/tag so pins can move. If verification
+   fails, disclose it and resolve it without silently retargeting the tag.
 
-Verify module installation from the tag, reported version and discovery. Give the maintainer
-the final commit/tag and acceptance result so consumer pins can move. Ref cleanup and
-publication remain separate approval steps.
+Release publication does not authorize deployment, ref cleanup or a visibility change.
+Check the freeze, consumer qualification, notice and deployment authorization separately.
 
 ### First-release backup acceptance
 

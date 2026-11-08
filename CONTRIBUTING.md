@@ -16,6 +16,41 @@ databases; [commands and CI](.agents/skills/go-storage-service/references/operat
 explains both-engine verification. Windows contributors use the [WSL workflow](.agents/skills/go-storage-service/references/operations.md#windows-shell).
 Agent-specific workflows are in the [agent guides](.agents/guides/README.md).
 
+## Public development workflow
+
+`main` is the shared, releasable baseline. Start a short-lived topic branch from current
+`main`; agent-created branches use `codex/<topic>`. There is no long-lived `dev` or release
+integration branch. Never merge archived private development history into a public branch.
+
+Keep each commit focused on one coherent change and explain its purpose. No special commit
+prefix is required. Review staged content and commit messages before pushing: credentials,
+private client details, deployment addresses, record payloads and raw operator logs belong
+in protected storage. Use synthetic examples and publish only reviewed, sanitized evidence.
+The same rule applies to PRs, issues, reviews and attachments.
+
+Open a PR against `main`. Use a draft early for substantial unfinished work; small completed
+changes can open ready for review. The description should explain the problem, resulting
+behavior, checks actually run, skipped coverage and material limitations. Keep specification,
+implementation and conformance changes together when the protocol changes.
+
+Before merge, bring the branch up to date when needed, run the checks appropriate to the
+final changes, and resolve review conversations. Skips are not passes; missing CI is not
+passing CI. A maintainer authorizes the merge. Squash merge by default and use a final title
+and description that explain the resulting change without conversational history. Preserve
+separate commits when their sequence helps review and the maintainer agrees. Delete the
+topic branch after merge; retain useful private evidence separately. Do not rewrite shared
+`main` history or move published tags.
+
+Protect `main` with PR review, required configured CI checks and resolved conversations;
+block force pushes and branch deletion. Maintainers configure these repository settings
+separately; this document does not assert that a particular GitHub rule or check is enabled.
+Agent opening of a PR does not itself authorize merging or changing protection settings.
+
+A green PR qualifies its tested revision, not a new squash commit. Releases must pass the
+[clean committed-candidate gate](docs/releasing.md#cutting-it) on the exact commit to be
+tagged. Tagging, publication and deployment require the applicable maintainer authorization;
+merging a PR does not authorize them or lift a deployment freeze.
+
 ## The specification is the contract
 
 The normative specifications in `specs/` are author-owned. Record ambiguities as findings
