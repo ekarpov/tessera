@@ -1,0 +1,36 @@
+# Tessera reference server. Builds with Docker or Podman:
+#
+#   docker build -f deploy/Containerfile -t tesserad .
+#
+# The build stage needs CGO and a C compiler for SQLite, which is why this is
+# not a scratch image built from a static binary. Alpine's musl keeps the
+# result small; the runtime stage carries the C library and certificates and
+# nothing else.
+FROM golang:1.27-alpine AS build
+RUN apk add --no-cache gcc musl-dev git
+WORKDIR /src
+# Copy the module files first so dependency resolution caches independently of
+# the source.
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# CGO for SQLite. The git metadata is present, so the binary can report the
+# commit it was built from through its discovery document.
+ENV CGO_ENABLED=1
+RUN go build -trimpath -o /out/tesserad ./cmd/tesserad
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata \
+    && adduser -S -u 10001 -h /var/lib/tessera tessera \
+    && mkdir -p /var/lib/tessera \
+    && chown tessera /var/lib/tessera \
+    && chmod 700 /var/lib/tessera
+COPY --from=build /out/tesserad /usr/local/bin/tesserad
+USER tessera
+WORKDIR /var/lib/tessera
+# The data directory must survive the container and must not be world
+# readable; the server refuses to start otherwise.
+VOLUME ["/var/lib/tessera"]
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/tesserad"]
+CMD ["-config", "/etc/tessera/server.json"]

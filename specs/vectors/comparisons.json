@@ -1,0 +1,122 @@
+[
+  {
+    "name": "large_integer_not_rounded",
+    "left": "{\"type\":\"integer\",\"value\":9007199254740993}",
+    "right": "{\"type\":\"float\",\"value\":9007199254740992.0}",
+    "equal": false,
+    "order": 1
+  },
+  {
+    "name": "negative_large_integer_not_rounded",
+    "left": "{\"type\":\"integer\",\"value\":-9007199254740993}",
+    "right": "{\"type\":\"float\",\"value\":-9007199254740992.0}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "int64_max_vs_rounded_float",
+    "left": "{\"type\":\"integer\",\"value\":9223372036854775807}",
+    "right": "{\"type\":\"float\",\"value\":9.223372036854776e+18}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "int64_min_exact",
+    "left": "{\"type\":\"integer\",\"value\":-9223372036854775808}",
+    "right": "{\"type\":\"float\",\"value\":-9.223372036854776e+18}",
+    "equal": true,
+    "order": 0
+  },
+  {
+    "name": "mixed_equal",
+    "left": "{\"type\":\"integer\",\"value\":42}",
+    "right": "{\"type\":\"float\",\"value\":42.0}",
+    "equal": true,
+    "order": 0
+  },
+  {
+    "name": "negative_fraction",
+    "left": "{\"type\":\"integer\",\"value\":-1}",
+    "right": "{\"type\":\"float\",\"value\":-1.5}",
+    "equal": false,
+    "order": 1
+  },
+  {
+    "name": "null_first",
+    "left": "{\"type\":\"null\"}",
+    "right": "{\"type\":\"integer\",\"value\":0}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "null_null",
+    "left": "{\"type\":\"null\"}",
+    "right": "{\"type\":\"null\"}",
+    "equal": true,
+    "order": 0
+  },
+  {
+    "name": "false_before_true",
+    "left": "{\"type\":\"boolean\",\"value\":false}",
+    "right": "{\"type\":\"boolean\",\"value\":true}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "text_codepoint",
+    "left": "{\"type\":\"text\",\"value\":\"\"}",
+    "right": "{\"type\":\"text\",\"value\":\"𐀀\"}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "text_id_lexical",
+    "left": "{\"type\":\"text\",\"value\":\"10\"}",
+    "right": "{\"type\":\"text\",\"value\":\"2\"}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "unicode_not_normalized",
+    "left": "{\"type\":\"text\",\"value\":\"é\"}",
+    "right": "{\"type\":\"text\",\"value\":\"é\"}",
+    "equal": false,
+    "order": 1
+  },
+  {
+    "name": "json_whitespace_matters",
+    "left": "{\"type\":\"json\",\"value\":\"{\\\"a\\\":1}\"}",
+    "right": "{\"type\":\"json\",\"value\":\"{ \\\"a\\\": 1 }\"}",
+    "equal": false,
+    "order_error": "invalid_filter"
+  },
+  {
+    "name": "blob_bytes_equal",
+    "left": "{\"type\":\"blob\",\"value\":\"Zg==\"}",
+    "right": "{\"type\":\"blob\",\"value\":\"Zg==\"}",
+    "equal": true,
+    "order_error": "invalid_filter"
+  },
+  {
+    "name": "numeric_string_incomparable",
+    "left": "{\"type\":\"integer\",\"value\":1}",
+    "right": "{\"type\":\"text\",\"value\":\"1\"}",
+    "equal": false,
+    "error": "invalid_filter",
+    "order_error": "invalid_filter"
+  },
+  {
+    "name": "reference_dataset_order",
+    "left": "{\"type\":\"reference\",\"value\":{\"meta_id\":\"root\",\"dataset_id\":\"a\",\"object_id\":\"9\"}}",
+    "right": "{\"type\":\"reference\",\"value\":{\"meta_id\":\"root\",\"dataset_id\":\"b\",\"object_id\":\"1\"}}",
+    "equal": false,
+    "order": -1
+  },
+  {
+    "name": "reference_meta_first",
+    "left": "{\"type\":\"reference\",\"value\":{\"meta_id\":\"a\",\"dataset_id\":\"z\",\"object_id\":\"9\"}}",
+    "right": "{\"type\":\"reference\",\"value\":{\"meta_id\":\"b\",\"dataset_id\":\"a\",\"object_id\":\"1\"}}",
+    "equal": false,
+    "order": -1
+  }
+]

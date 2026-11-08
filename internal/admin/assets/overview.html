@@ -1,0 +1,33 @@
+{{define "content"}}
+<p class="note">Operational state for this deployment. Nothing a record contains is shown here.</p>
+<table>
+<tbody>
+<tr><th>Dataset</th><td class="identity">{{.Dataset.ID}}</td></tr>
+{{if .Dataset.ReplacedDatasetID}}<tr><th>Replaces</th><td class="identity">{{.Dataset.ReplacedDatasetID}}</td></tr>{{end}}
+<tr><th>Engine</th><td>{{.Engine}}</td></tr>
+<tr><th>Watermark</th><td class="identity">{{.Dataset.Watermark}}</td></tr>
+<tr><th>Whole-schema version</th><td class="identity">{{.Dataset.SchemaVersion}}</td></tr>
+<tr><th>View version</th><td class="identity">{{.Dataset.ViewVersion}}</td></tr>
+<tr><th>Content store</th><td class="identity">{{if .Dataset.ContentStoreID}}{{.Dataset.ContentStoreID}}{{else}}<span class="state">not configured</span>{{end}}</td></tr>
+<tr><th>Types</th><td>{{.TypeCount}}</td></tr>
+{{if .Usage}}<tr><th>Records</th><td>{{.Usage.Records}}</td></tr>
+<tr><th>Stored bytes</th><td>{{.Usage.Bytes}}{{if .Usage.MaxBytes}} of {{.Usage.MaxBytes}}. At the quota this dataset stops accepting writes; <code>-set-dataset-limits</code> raises or removes it.{{else}}, no quota.{{end}}</td></tr>{{end}}
+</tbody>
+</table>
+
+<h2>Advertised capabilities</h2>
+<p class="note">Only implemented optional features are advertised. Anything absent is refused with
+<code>not_supported</code> rather than answered partially. Required operations are never toggles.</p>
+<table><thead><tr><th>Capability</th><th>State</th></tr></thead><tbody>
+{{range .Capabilities}}<tr><td>{{.Name}}</td><td>{{if .Advertised}}advertised{{else}}<span class="state">withheld</span>{{end}}</td></tr>{{end}}
+</tbody></table>
+{{if .Retired}}<p class="note">{{range $i, $n := .Retired}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}
+were advertised capabilities and are now required operations. They are always available here and
+cannot be withheld, which is why they are not listed above as decisions.</p>{{end}}
+
+<h2>Declared bounds</h2>
+<p class="note">A request beyond one of these fails at the stated limit rather than being dropped.</p>
+<table><thead><tr><th>Bound</th><th>Value</th></tr></thead><tbody>
+{{range .Limits}}<tr><td>{{.Name}}</td><td>{{.Value}}</td></tr>{{end}}
+</tbody></table>
+{{end}}

@@ -1,0 +1,17 @@
+{{define "layout"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}} · Tessera administration</title>
+<link rel="stylesheet" href="/admin/admin.css"></head><body>
+<nav>
+<a href="/admin"{{if eq .Page "overview"}} aria-current="page"{{end}}>Overview</a>
+<a href="/admin/datasets"{{if eq .Page "datasets"}} aria-current="page"{{end}}>Datasets</a>
+<a href="/admin/principals"{{if eq .Page "principals"}} aria-current="page"{{end}}>Principals</a>
+<a href="/admin/authorizations"{{if eq .Page "authorizations"}} aria-current="page"{{end}}>Authorizations</a>
+<a href="/admin/schema"{{if eq .Page "schema"}} aria-current="page"{{end}}>Schema</a>
+</nav>
+<h1>{{.Title}}</h1>
+{{if .Message}}<p class="note">{{.Message}}</p>{{end}}
+{{template "content" .}}
+</body></html>{{end}}

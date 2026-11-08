@@ -1,0 +1,70 @@
+# Tessera reference server. Install to /etc/systemd/system/tesserad.service.
+#
+# The service runs as its own unprivileged user and can write nothing except
+# its data directory. Everything else it needs — the configuration, the TLS
+# key — it only reads, so a compromised process cannot rewrite what it is told
+# to be on the next restart.
+[Unit]
+Description=Tessera reference server
+Documentation=https://github.com/ekarpov/tessera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=tessera
+Group=tessera
+ExecStart=/usr/local/bin/tesserad -config /etc/tessera/server.json
+Restart=on-failure
+RestartSec=5s
+
+# Migrations run on startup and are forward-only. A binary that meets a
+# database from a newer version refuses to start, and restarting will not fix
+# that, so give up rather than loop.
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+# The dataset, its content and the identity registry live here and nowhere
+# else. 0700 because the server refuses a data directory others can read.
+StateDirectory=tessera
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/tessera
+
+# The listener is the only thing this service offers. Nothing below is needed
+# to serve requests, and each line is a way a compromised process cannot
+# spread.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# Read-only access to the configuration and TLS material.
+ReadOnlyPaths=/etc/tessera
+ReadWritePaths=/var/lib/tessera
+
+# Binding 443 needs a capability this unit deliberately does not grant. Put a
+# reverse proxy in front, or listen high and redirect. A storage server that
+# can bind privileged ports is one more thing to get wrong.
+
+[Install]
+WantedBy=multi-user.target

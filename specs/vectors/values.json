@@ -1,0 +1,850 @@
+[
+  {
+    "name": "integer_zero",
+    "input": "{\"type\":\"integer\",\"value\":0}",
+    "expected": "{\"type\":\"integer\",\"value\":0}"
+  },
+  {
+    "name": "integer_minimum",
+    "input": "{\"type\":\"integer\",\"value\":-9223372036854775808}",
+    "expected": "{\"type\":\"integer\",\"value\":-9223372036854775808}"
+  },
+  {
+    "name": "integer_maximum",
+    "input": "{\"type\":\"integer\",\"value\":9223372036854775807}",
+    "expected": "{\"type\":\"integer\",\"value\":9223372036854775807}"
+  },
+  {
+    "name": "integer_beyond_double",
+    "input": "{\"type\":\"integer\",\"value\":9007199254740993}",
+    "expected": "{\"type\":\"integer\",\"value\":9007199254740993}"
+  },
+  {
+    "name": "integer_negative_beyond_double",
+    "input": "{\"type\":\"integer\",\"value\":-9007199254740993}",
+    "expected": "{\"type\":\"integer\",\"value\":-9007199254740993}"
+  },
+  {
+    "name": "integral_lexeme_1e3",
+    "input": "{\"type\":\"integer\",\"value\":1e3}",
+    "expected": "{\"type\":\"integer\",\"value\":1000}"
+  },
+  {
+    "name": "integral_lexeme_1.000",
+    "input": "{\"type\":\"integer\",\"value\":1.000}",
+    "expected": "{\"type\":\"integer\",\"value\":1}"
+  },
+  {
+    "name": "integral_lexeme_100e-2",
+    "input": "{\"type\":\"integer\",\"value\":100e-2}",
+    "expected": "{\"type\":\"integer\",\"value\":1}"
+  },
+  {
+    "name": "integral_lexeme_-0",
+    "input": "{\"type\":\"integer\",\"value\":-0}",
+    "expected": "{\"type\":\"integer\",\"value\":0}"
+  },
+  {
+    "name": "integral_lexeme_92233720368547758070e-1",
+    "input": "{\"type\":\"integer\",\"value\":92233720368547758070e-1}",
+    "expected": "{\"type\":\"integer\",\"value\":9223372036854775807}"
+  },
+  {
+    "name": "invalid_integer_9223372036854775808",
+    "input": "{\"type\":\"integer\",\"value\":9223372036854775808}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_-9223372036854775809",
+    "input": "{\"type\":\"integer\",\"value\":-9223372036854775809}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_1.5",
+    "input": "{\"type\":\"integer\",\"value\":1.5}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_1e999999999",
+    "input": "{\"type\":\"integer\",\"value\":1e999999999}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_1e-999999999",
+    "input": "{\"type\":\"integer\",\"value\":1e-999999999}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_\"42\"",
+    "input": "{\"type\":\"integer\",\"value\":\"42\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_null",
+    "input": "{\"type\":\"integer\",\"value\":null}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_integer_true",
+    "input": "{\"type\":\"integer\",\"value\":true}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "float_fraction",
+    "input": "{\"type\":\"float\",\"value\":1.25}",
+    "expected": "{\"type\":\"float\",\"value\":1.25}"
+  },
+  {
+    "name": "float_negative_zero",
+    "input": "{\"type\":\"float\",\"value\":-0.0}",
+    "expected": "{\"type\":\"float\",\"value\":-0.0}"
+  },
+  {
+    "name": "float_subnormal",
+    "input": "{\"type\":\"float\",\"value\":5e-324}",
+    "expected": "{\"type\":\"float\",\"value\":5e-324}"
+  },
+  {
+    "name": "float_largest",
+    "input": "{\"type\":\"float\",\"value\":1.7976931348623157e+308}",
+    "expected": "{\"type\":\"float\",\"value\":1.7976931348623157e+308}"
+  },
+  {
+    "name": "float_overflow",
+    "input": "{\"type\":\"float\",\"value\":1e400}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "float_underflow",
+    "input": "{\"type\":\"float\",\"value\":1e-4000}",
+    "expected": "{\"type\":\"float\",\"value\":0.0}"
+  },
+  {
+    "name": "text_unicode",
+    "input": "{\"type\":\"text\",\"value\":\"Aé🙂é\"}",
+    "expected": "{\"type\":\"text\",\"value\":\"Aé🙂é\"}"
+  },
+  {
+    "name": "text_exact_byte_limit",
+    "input": "{\"type\":\"text\",\"value\":\"é\"}",
+    "expected": "{\"type\":\"text\",\"value\":\"é\"}",
+    "max_text_bytes": 2
+  },
+  {
+    "name": "text_exceeds_byte_limit",
+    "input": "{\"type\":\"text\",\"value\":\"é\"}",
+    "max_text_bytes": 1,
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "true",
+    "input": "{\"type\":\"boolean\",\"value\":true}",
+    "expected": "{\"type\":\"boolean\",\"value\":true}"
+  },
+  {
+    "name": "false",
+    "input": "{\"type\":\"boolean\",\"value\":false}",
+    "expected": "{\"type\":\"boolean\",\"value\":false}"
+  },
+  {
+    "name": "date_exact",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-02-29T23:59:59.001Z\"}",
+    "expected": "{\"type\":\"date_time\",\"value\":\"2024-02-29T23:59:59.001Z\"}"
+  },
+  {
+    "name": "invalid_date_2023-02-29T00:00:00.000Z",
+    "input": "{\"type\":\"date_time\",\"value\":\"2023-02-29T00:00:00.000Z\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_date_2024-01-01T00:00:00Z",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-01-01T00:00:00Z\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_date_2024-01-01T00:00:00.000+00:00",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-01-01T00:00:00.000+00:00\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_date_2024-01-01T00:00:00.0000Z",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-01-01T00:00:00.0000Z\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_date_2024-01-01T00:00:00,000Z",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-01-01T00:00:00,000Z\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_opaque",
+    "input": "{\"type\":\"media\",\"value\":\"c-example//content-item-123\"}",
+    "expected": "{\"type\":\"media\",\"value\":\"c-example//content-item-123\"}"
+  },
+  {
+    "name": "json_preserves_format",
+    "input": "{\"type\":\"json\",\"value\":\" { \\\"z\\\": 1, \\\"a\\\" : [true, null] }\\n\"}",
+    "expected": "{\"type\":\"json\",\"value\":\" { \\\"z\\\": 1, \\\"a\\\" : [true, null] }\\n\"}"
+  },
+  {
+    "name": "json_scalar",
+    "input": "{\"type\":\"json\",\"value\":\"42\"}",
+    "expected": "{\"type\":\"json\",\"value\":\"42\"}"
+  },
+  {
+    "name": "json_preserves_duplicates_inside_string",
+    "input": "{\"type\":\"json\",\"value\":\"{\\\"a\\\":1,\\\"a\\\":2}\"}",
+    "expected": "{\"type\":\"json\",\"value\":\"{\\\"a\\\":1,\\\"a\\\":2}\"}"
+  },
+  {
+    "name": "json_invalid",
+    "input": "{\"type\":\"json\",\"value\":\"{\\\"a\\\":\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "json_trailing",
+    "input": "{\"type\":\"json\",\"value\":\"{} {}\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "blob_empty",
+    "input": "{\"type\":\"blob\",\"value\":\"\"}",
+    "expected": "{\"type\":\"blob\",\"value\":\"\"}"
+  },
+  {
+    "name": "blob_padded",
+    "input": "{\"type\":\"blob\",\"value\":\"AAEC/w==\"}",
+    "expected": "{\"type\":\"blob\",\"value\":\"AAEC/w==\"}",
+    "max_inline_blob_bytes": 4
+  },
+  {
+    "name": "blob_limit",
+    "input": "{\"type\":\"blob\",\"value\":\"AAEC/w==\"}",
+    "max_inline_blob_bytes": 3,
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "blob_unpadded",
+    "input": "{\"type\":\"blob\",\"value\":\"Zg\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "blob_nonzero_pad_bits",
+    "input": "{\"type\":\"blob\",\"value\":\"Zh==\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "blob_newline",
+    "input": "{\"type\":\"blob\",\"value\":\"Zg==\\n\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "blob_url_alphabet",
+    "input": "{\"type\":\"blob\",\"value\":\"_w==\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "reference",
+    "input": "{\"type\":\"reference\",\"value\":{\"dataset_id\":\"s-1\",\"object_id\":\"opaque /%?🙂\",\"meta_id\":\"com.example.observation\"}}",
+    "expected": "{\"type\":\"reference\",\"value\":{\"dataset_id\":\"s-1\",\"object_id\":\"opaque /%?🙂\",\"meta_id\":\"com.example.observation\"}}"
+  },
+  {
+    "name": "reference_invalid",
+    "input": "{\"type\":\"reference\",\"value\":{\"dataset_id\":\"s-1\",\"object_id\":\"bad//id\",\"meta_id\":\"com.example.observation\"}}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "null",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}"
+  },
+  {
+    "name": "null_payload",
+    "input": "{\"type\":\"null\",\"value\":null}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "missing_type",
+    "input": "{\"value\":1}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "missing_value",
+    "input": "{\"type\":\"integer\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "unknown_type",
+    "input": "{\"type\":\"decimal\",\"value\":1}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bare_null",
+    "input": "null",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bare_array",
+    "input": "[]",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "unpaired_surrogate",
+    "input": "{\"type\":\"text\",\"value\":\"\\ud800\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "duplicate_member",
+    "input": "{\"type\":\"integer\",\"value\":1,\"value\":2}",
+    "error": "invalid_field"
+  },
+  {
+    "name": "future_response_field",
+    "input": "{\"type\":\"integer\",\"value\":1,\"future\":{\"note\":true}}",
+    "expected": "{\"type\":\"integer\",\"value\":1}"
+  },
+  {
+    "name": "surrogate_pair",
+    "input": "{\"type\":\"text\",\"value\":\"\\ud83d\\ude42\"}",
+    "expected": "{\"type\":\"text\",\"value\":\"🙂\"}"
+  },
+  {
+    "name": "integer_to_float_9007199254740992",
+    "input": "{\"type\":\"integer\",\"value\":9007199254740992}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740992.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "integer_to_float_9007199254740993",
+    "input": "{\"type\":\"integer\",\"value\":9007199254740993}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "integer_to_float_9007199254740994",
+    "input": "{\"type\":\"integer\",\"value\":9007199254740994}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740994.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "integer_to_float_-9007199254740992",
+    "input": "{\"type\":\"integer\",\"value\":-9007199254740992}",
+    "expected": "{\"type\":\"float\",\"value\":-9007199254740992.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "integer_to_float_-9007199254740993",
+    "input": "{\"type\":\"integer\",\"value\":-9007199254740993}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "integer_to_float_-9007199254740994",
+    "input": "{\"type\":\"integer\",\"value\":-9007199254740994}",
+    "expected": "{\"type\":\"float\",\"value\":-9007199254740994.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "integer_to_float_-9223372036854775808",
+    "input": "{\"type\":\"integer\",\"value\":-9223372036854775808}",
+    "expected": "{\"type\":\"float\",\"value\":-9.223372036854776e+18}",
+    "convert_to": "float"
+  },
+  {
+    "name": "integer_to_float_9223372036854775807",
+    "input": "{\"type\":\"integer\",\"value\":9223372036854775807}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "float_to_integer_42.0",
+    "input": "{\"type\":\"float\",\"value\":42.0}",
+    "expected": "{\"type\":\"integer\",\"value\":42}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "float_to_integer_-2.0",
+    "input": "{\"type\":\"float\",\"value\":-2.0}",
+    "expected": "{\"type\":\"integer\",\"value\":-2}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "float_to_integer_-9.223372036854776e+18",
+    "input": "{\"type\":\"float\",\"value\":-9.223372036854776e+18}",
+    "expected": "{\"type\":\"integer\",\"value\":-9223372036854775808}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "float_to_integer_9.223372036854776e+18",
+    "input": "{\"type\":\"float\",\"value\":9.223372036854776e+18}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "float_to_integer_1.5",
+    "input": "{\"type\":\"float\",\"value\":1.5}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_integer_00042",
+    "input": "{\"type\":\"text\",\"value\":\"00042\"}",
+    "expected": "{\"type\":\"integer\",\"value\":42}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "text_integer_-0002",
+    "input": "{\"type\":\"text\",\"value\":\"-0002\"}",
+    "expected": "{\"type\":\"integer\",\"value\":-2}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "text_integer_-0",
+    "input": "{\"type\":\"text\",\"value\":\"-0\"}",
+    "expected": "{\"type\":\"integer\",\"value\":0}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "bad_text_integer_+1",
+    "input": "{\"type\":\"text\",\"value\":\"+1\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_integer_ 1",
+    "input": "{\"type\":\"text\",\"value\":\" 1\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_integer_1 ",
+    "input": "{\"type\":\"text\",\"value\":\"1 \"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_integer_1.0",
+    "input": "{\"type\":\"text\",\"value\":\"1.0\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_integer_1e0",
+    "input": "{\"type\":\"text\",\"value\":\"1e0\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_integer_9223372036854775808",
+    "input": "{\"type\":\"text\",\"value\":\"9223372036854775808\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_float_1.25",
+    "input": "{\"type\":\"text\",\"value\":\"1.25\"}",
+    "expected": "{\"type\":\"float\",\"value\":1.25}",
+    "convert_to": "float"
+  },
+  {
+    "name": "text_float_1e-4000",
+    "input": "{\"type\":\"text\",\"value\":\"1e-4000\"}",
+    "expected": "{\"type\":\"float\",\"value\":0.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "text_float_9007199254740993",
+    "input": "{\"type\":\"text\",\"value\":\"9007199254740993\"}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740992.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "text_float_9007199254740995",
+    "input": "{\"type\":\"text\",\"value\":\"9007199254740995\"}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740996.0}",
+    "convert_to": "float"
+  },
+  {
+    "name": "bad_text_float_NaN",
+    "input": "{\"type\":\"text\",\"value\":\"NaN\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_Infinity",
+    "input": "{\"type\":\"text\",\"value\":\"Infinity\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_1e400",
+    "input": "{\"type\":\"text\",\"value\":\"1e400\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_+1",
+    "input": "{\"type\":\"text\",\"value\":\"+1\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_01",
+    "input": "{\"type\":\"text\",\"value\":\"01\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_ 1",
+    "input": "{\"type\":\"text\",\"value\":\" 1\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "bad_text_float_0x1p2",
+    "input": "{\"type\":\"text\",\"value\":\"0x1p2\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_boolean_true",
+    "input": "{\"type\":\"text\",\"value\":\"true\"}",
+    "expected": "{\"type\":\"boolean\",\"value\":true}",
+    "convert_to": "boolean"
+  },
+  {
+    "name": "text_boolean_false",
+    "input": "{\"type\":\"text\",\"value\":\"false\"}",
+    "expected": "{\"type\":\"boolean\",\"value\":false}",
+    "convert_to": "boolean"
+  },
+  {
+    "name": "text_boolean_uppercase",
+    "input": "{\"type\":\"text\",\"value\":\"TRUE\"}",
+    "convert_to": "boolean",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_to_date_time",
+    "input": "{\"type\":\"text\",\"value\":\"2024-02-29T23:59:59.001Z\"}",
+    "expected": "{\"type\":\"date_time\",\"value\":\"2024-02-29T23:59:59.001Z\"}",
+    "convert_to": "date_time"
+  },
+  {
+    "name": "text_to_media",
+    "input": "{\"type\":\"text\",\"value\":\"c-example//opaque\"}",
+    "expected": "{\"type\":\"media\",\"value\":\"c-example//opaque\"}",
+    "convert_to": "media"
+  },
+  {
+    "name": "text_to_json",
+    "input": "{\"type\":\"text\",\"value\":\" {\\\"x\\\":1} \"}",
+    "expected": "{\"type\":\"json\",\"value\":\" {\\\"x\\\":1} \"}",
+    "convert_to": "json"
+  },
+  {
+    "name": "text_to_blob",
+    "input": "{\"type\":\"text\",\"value\":\"Zg==\"}",
+    "expected": "{\"type\":\"blob\",\"value\":\"Zg==\"}",
+    "convert_to": "blob"
+  },
+  {
+    "name": "forbidden_integer_to_boolean",
+    "input": "{\"type\":\"integer\",\"value\":1}",
+    "convert_to": "boolean",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "forbidden_integer_to_text",
+    "input": "{\"type\":\"integer\",\"value\":1}",
+    "convert_to": "text",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "forbidden_integer_to_blob",
+    "input": "{\"type\":\"integer\",\"value\":1}",
+    "convert_to": "blob",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "forbidden_integer_to_date_time",
+    "input": "{\"type\":\"integer\",\"value\":1}",
+    "convert_to": "date_time",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "forbidden_date_time_to_integer",
+    "input": "{\"type\":\"date_time\",\"value\":\"2024-01-01T00:00:00.000Z\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "forbidden_boolean_to_text",
+    "input": "{\"type\":\"boolean\",\"value\":true}",
+    "convert_to": "text",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "null_to_integer",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "integer"
+  },
+  {
+    "name": "null_to_float",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "float"
+  },
+  {
+    "name": "null_to_text",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "text"
+  },
+  {
+    "name": "null_to_boolean",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "boolean"
+  },
+  {
+    "name": "null_to_date_time",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "date_time"
+  },
+  {
+    "name": "null_to_media",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "media"
+  },
+  {
+    "name": "null_to_json",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "json"
+  },
+  {
+    "name": "null_to_blob",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "blob"
+  },
+  {
+    "name": "null_to_reference",
+    "input": "{\"type\":\"null\"}",
+    "expected": "{\"type\":\"null\"}",
+    "convert_to": "reference"
+  },
+  {
+    "name": "date_leap_second_rejected",
+    "input": "{\"type\":\"date_time\",\"value\":\"2016-12-31T23:59:60.000Z\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "integer_zero_huge_exponent",
+    "input": "{\"type\":\"integer\",\"value\":0e9999999999999999999999999}",
+    "expected": "{\"type\":\"integer\",\"value\":0}"
+  },
+  {
+    "name": "float_negative_underflow",
+    "input": "{\"type\":\"float\",\"value\":-1e-4000}",
+    "expected": "{\"type\":\"float\",\"value\":-0.0}"
+  },
+  {
+    "name": "wire_float_rounds_ties_even_down",
+    "input": "{\"type\":\"float\",\"value\":9007199254740993}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740992}"
+  },
+  {
+    "name": "wire_float_rounds_ties_even_up",
+    "input": "{\"type\":\"float\",\"value\":9007199254740995}",
+    "expected": "{\"type\":\"float\",\"value\":9007199254740996}"
+  },
+  {
+    "name": "json_unpaired_surrogate",
+    "input": "{\"type\": \"json\", \"value\": \"\\\"\\\\ud800\\\"\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_missing_store",
+    "input": "{\"type\":\"media\",\"value\":\"content-item-123\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_empty_store",
+    "input": "{\"type\":\"media\",\"value\":\"//item\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_empty_item",
+    "input": "{\"type\":\"media\",\"value\":\"c-example//\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_item_reserved_separator",
+    "input": "{\"type\":\"media\",\"value\":\"c-example//item//other\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_item_control",
+    "input": "{\"type\":\"media\",\"value\":\"c-example//a\\u0000b\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_item_over_255_bytes",
+    "input": "{\"type\":\"media\",\"value\":\"c-example//éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "media_invalid_store",
+    "input": "{\"type\":\"media\",\"value\":\"bad/store//item\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_to_media_missing_store",
+    "input": "{\"type\":\"text\",\"value\":\"opaque\"}",
+    "error": "invalid_field_value",
+    "convert_to": "media"
+  },
+  {
+    "name": "fixed_beyond_38_significant_digits",
+    "input": "{\"type\":\"fixed\",\"value\":\"1234567890123456789012345678901234567890.5\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"1234567890123456789012345678901234567890.5\"}"
+  },
+  {
+    "name": "fixed_not_representable_as_binary64",
+    "input": "{\"type\":\"fixed\",\"value\":\"1.00000000000000001\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"1.00000000000000001\"}"
+  },
+  {
+    "name": "fixed_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"0\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"0\"}"
+  },
+  {
+    "name": "fixed_negative",
+    "input": "{\"type\":\"fixed\",\"value\":\"-1.5\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"-1.5\"}"
+  },
+  {
+    "name": "fixed_below_one",
+    "input": "{\"type\":\"fixed\",\"value\":\"0.001\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"0.001\"}"
+  },
+  {
+    "name": "fixed_no_fraction",
+    "input": "{\"type\":\"fixed\",\"value\":\"42\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"42\"}"
+  },
+  {
+    "name": "fixed_negative_below_one",
+    "input": "{\"type\":\"fixed\",\"value\":\"-0.5\"}",
+    "expected": "{\"type\":\"fixed\",\"value\":\"-0.5\"}"
+  },
+  {
+    "name": "invalid_fixed_trailing_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"1.50\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_integral_point_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"1.0\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_leading_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"01\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_negative_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"-0\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_plus_sign",
+    "input": "{\"type\":\"fixed\",\"value\":\"+1\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_exponent",
+    "input": "{\"type\":\"fixed\",\"value\":\"1e5\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_empty_fraction",
+    "input": "{\"type\":\"fixed\",\"value\":\"1.\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_bare_point",
+    "input": "{\"type\":\"fixed\",\"value\":\".5\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_padded_zero",
+    "input": "{\"type\":\"fixed\",\"value\":\"0.0\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_as_number",
+    "input": "{\"type\":\"fixed\",\"value\":1}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "invalid_fixed_empty",
+    "input": "{\"type\":\"fixed\",\"value\":\"\"}",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "integer_to_fixed",
+    "input": "{\"type\":\"integer\",\"value\":42}",
+    "convert_to": "fixed",
+    "expected": "{\"type\":\"fixed\",\"value\":\"42\"}"
+  },
+  {
+    "name": "fixed_to_integer",
+    "input": "{\"type\":\"fixed\",\"value\":\"42\"}",
+    "convert_to": "integer",
+    "expected": "{\"type\":\"integer\",\"value\":42}"
+  },
+  {
+    "name": "fixed_to_integer_with_fraction",
+    "input": "{\"type\":\"fixed\",\"value\":\"42.5\"}",
+    "convert_to": "integer",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "fixed_to_float_exact",
+    "input": "{\"type\":\"fixed\",\"value\":\"0.5\"}",
+    "convert_to": "float",
+    "expected": "{\"type\":\"float\",\"value\":0.5}"
+  },
+  {
+    "name": "fixed_to_float_inexact",
+    "input": "{\"type\":\"fixed\",\"value\":\"0.1\"}",
+    "convert_to": "float",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "float_to_fixed",
+    "input": "{\"type\":\"float\",\"value\":0.5}",
+    "convert_to": "fixed",
+    "error": "invalid_field_value"
+  },
+  {
+    "name": "text_to_fixed",
+    "input": "{\"type\":\"text\",\"value\":\"1.5\"}",
+    "convert_to": "fixed",
+    "expected": "{\"type\":\"fixed\",\"value\":\"1.5\"}"
+  },
+  {
+    "name": "text_to_fixed_not_canonical",
+    "input": "{\"type\":\"text\",\"value\":\"1.50\"}",
+    "convert_to": "fixed",
+    "error": "invalid_field_value"
+  }
+]

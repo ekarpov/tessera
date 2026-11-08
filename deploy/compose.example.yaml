@@ -1,0 +1,66 @@
+# A self-hosted Tessera on PostgreSQL. For SQLite, drop the database service
+# and set "engine": "sqlite" in the configuration.
+#
+#   docker compose -f deploy/compose.example.yaml up -d
+#
+# Read deploy/README.md first: the DSN and TLS key are files this compose
+# mounts read-only, and it will not start without them.
+services:
+  tesserad:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - state:/var/lib/tessera
+      # Configuration, TLS material and the database DSN are read-only to the
+      # server: a compromised process must not be able to rewrite what it is
+      # told to be on the next restart.
+      #
+      # Read-only is not the same as private. The DSN and the TLS key must also
+      # be mode 0600 on the host — the DSN carries the database password — and
+      # the server refuses to start on a credential file other accounts can
+      # read. See deploy/README.md.
+      - ./server.json:/etc/tessera/server.json:ro
+      - ./tls:/etc/tessera/tls:ro
+      - ./postgres.dsn:/etc/tessera/postgres.dsn:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tessera
+      POSTGRES_USER: tessera
+      # Supply this from a file or your own secret store. An inline password
+      # here would end up in the image history and in every shell that runs
+      # docker inspect.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+secrets:
+  postgres_password:
+    file: ./postgres.password
+
+volumes:
+  state:
+  database:

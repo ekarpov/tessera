@@ -1,0 +1,29 @@
+:root { color-scheme: light dark; --edge: #8884; --muted: #6b7280; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; padding: 1.5rem 1rem 4rem; max-width: 60rem; line-height: 1.5;
+  font: 1rem/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+nav { display: flex; flex-wrap: wrap; gap: 1rem; padding-bottom: .75rem; border-bottom: 1px solid var(--edge); }
+nav a[aria-current="page"] { font-weight: 600; text-decoration: none; }
+h1 { font-size: 1.4rem; margin: 1.5rem 0 .25rem; }
+h2 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
+p.note { color: var(--muted); margin: .25rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; font-size: .95rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--edge); vertical-align: top; }
+th { font-weight: 600; }
+td.identity { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; word-break: break-all; }
+form.inline { display: flex; flex-wrap: wrap; gap: .35rem; }
+button { font: inherit; padding: .2rem .6rem; cursor: pointer; }
+fieldset { border: 1px solid var(--edge); margin: 1rem 0; padding: .75rem 1rem 1rem; }
+label { display: block; margin: .5rem 0; }
+label input { display: block; width: 100%; max-width: 32rem; padding: .3rem; font: inherit; }
+.state { color: var(--muted); }
+.warn { color: #b45309; }
+@media (max-width: 40rem) {
+  table, thead, tbody, th, td, tr { display: block; }
+  thead { display: none; }
+  tr { border-bottom: 1px solid var(--edge); padding: .5rem 0; }
+  td { border: 0; padding: .15rem 0; }
+  /* The header row is hidden, so each cell carries its own label. */
+  td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); }
+  td[data-label=""]::before { content: none; }
+}

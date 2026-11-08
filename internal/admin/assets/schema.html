@@ -1,0 +1,21 @@
+{{define "content"}}
+<p class="note">Effective metadata, inherited fields included. Roles and annotation keys are opaque
+to this server: it stores them and never interprets them. No record values appear here.</p>
+{{range .Types}}
+<h2>{{.ID}}</h2>
+<table><tbody>
+{{if .ParentID}}<tr><th>Inherits</th><td class="identity">{{.ParentID}}</td></tr>{{end}}
+<tr><th>Name</th><td>{{.Name}}</td></tr>
+<tr><th>Effective schema version</th><td class="identity">{{.SchemaVersion}}</td></tr>
+<tr><th>Roles</th><td>{{if .Roles}}{{range .Roles}}{{.}} {{end}}{{else}}<span class="state">none</span>{{end}}</td></tr>
+<tr><th>Annotation keys</th><td>{{if .AnnotationKeys}}{{range .AnnotationKeys}}{{.}} {{end}}{{else}}<span class="state">none</span>{{end}}</td></tr>
+</tbody></table>
+<table><thead><tr><th>Field</th><th>Name</th><th>Type</th><th>Declared by</th><th>Roles</th></tr></thead><tbody>
+{{range .Fields}}<tr>
+<td class="identity" data-label="Field">{{.ID}}</td><td data-label="Name">{{.Name}}</td><td data-label="Type">{{.Type}}</td>
+<td class="identity" data-label="Declared by">{{.MetaID}}</td>
+<td data-label="Roles">{{range .Roles}}{{.}} {{end}}</td>
+</tr>{{else}}<tr><td colspan="5" class="state">No fields declared.</td></tr>{{end}}
+</tbody></table>
+{{else}}<p class="state">No types defined.</p>{{end}}
+{{end}}

@@ -1,0 +1,43 @@
+{{define "content"}}
+<p class="note">One row per installation. <strong>Withdrawing grants</strong> removes dataset access
+and leaves the credentials working, so the holder can still recover the outcome of a write it made
+while it could. <strong>Revoking</strong> ends the credentials themselves. They are different
+answers, and neither affects another installation of the same account.</p>
+<table><thead><tr><th>Authorization</th><th>Principal</th><th>Client</th><th>Dataset</th><th>Grants</th><th>Access changes</th><th>Live tokens</th><th>State</th><th>Actions</th></tr></thead><tbody>
+{{range .Authorizations}}<tr>
+<td class="identity" data-label="Authorization">{{.ID}}</td>
+<td class="identity" data-label="Principal">{{.Principal}}</td>
+<td data-label="Client">{{if .ClientName}}{{.ClientName}}{{else}}<span class="state">{{.Client}}</span>{{end}}</td>
+<td class="identity" data-label="Dataset">{{.Dataset}}</td>
+<td data-label="Grants">{{if .Grants.Read}}read {{end}}{{if .Grants.Write}}write {{end}}{{if .Grants.Schema}}schema {{end}}{{if .Grants.Erase}}erase{{end}}{{if .Withdrawn}}<span class="state">none</span>{{end}}</td>
+<td data-label="Access changes">{{if .Grants.ExpiresAt}}{{.Grants.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}{{else}}<span class="state">never</span>{{end}}</td>
+<td data-label="Live tokens">{{.ActiveTokens}}</td>
+<td data-label="State">{{if .Revoked}}<span class="warn">revoked</span>{{else if .Withdrawn}}<span class="warn">grants withdrawn</span>{{else}}active{{end}}</td>
+<td data-label="">{{if not .Revoked}}
+<form class="inline" method="post" action="/admin/authorizations">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="authorization" value="{{.ID}}">
+{{if not .Withdrawn}}<button name="action" value="withdraw">Withdraw grants</button>{{end}}
+<button name="action" value="revoke">Revoke credentials</button>
+</form>{{end}}</td>
+</tr>{{else}}<tr><td colspan="8" class="state">No authorizations issued.</td></tr>{{end}}
+</tbody></table>
+
+<h2>Share read access</h2>
+<p class="note">A share limits the guest's account, not only the sign-in named here: every sign-in
+that account already has on this dataset is narrowed now, and every one it obtains later — a new
+token, an application approved on another device — inherits the same types. Guests are read-only.
+A type grant authorizes queries over exactly the named concrete types; references never widen it,
+and changing a share invalidates pages already issued. An account that writes to this dataset
+cannot be shared with: that would make a writer read-only everywhere, which is a different
+decision.</p>
+<form method="post" action="/admin/authorizations">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<fieldset>
+<label>Recipient authorization <input name="authorization" required autocomplete="off"></label>
+<label>Concrete type IDs, separated by commas <input name="types" required autocomplete="off"></label>
+<label>Expiry, an optional UTC timestamp <input name="expires_at" placeholder="2026-12-31T00:00:00Z" autocomplete="off"></label>
+<button name="action" value="share">Grant read access</button>
+</fieldset>
+</form>
+{{end}}

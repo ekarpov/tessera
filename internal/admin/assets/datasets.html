@@ -1,0 +1,26 @@
+{{define "content"}}
+<p class="note">Every dataset this server holds that administration may read. Creating one here is
+the operator's route: a server owner adding people as they arrive should not need a browser consent
+carrying erase, nor shell access to the host.</p>
+<table><thead><tr><th>Dataset</th><th>Name</th><th>Records</th><th>Content store</th></tr></thead><tbody>
+{{range .Datasets}}<tr>
+<td class="identity" data-label="Dataset">{{.ID}}</td>
+<td data-label="Name">{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="state">unnamed</span>{{end}}</td>
+<td data-label="Records">{{.Watermark}}</td>
+<td data-label="Content store">{{if .ContentStoreID}}{{.ContentStoreID}}{{else}}<span class="state">none</span>{{end}}</td>
+</tr>{{else}}<tr><td colspan="4" class="state">This server holds no dataset administration may read.</td></tr>{{end}}
+</tbody></table>
+
+{{if .CanCreate}}
+<h2>Create a dataset</h2>
+<p class="note">The dataset is created empty and belongs to this server. Give somebody access to it
+from the principals page; creating it grants nobody anything.</p>
+<form method="post" action="/admin/datasets">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>Display name <input name="display_name" autocomplete="off"></label>
+<button type="submit">Create dataset</button>
+</form>
+{{else}}
+<p class="note">This storage cannot create datasets, so none can be made here.</p>
+{{end}}
+{{end}}

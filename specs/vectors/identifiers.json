@@ -1,0 +1,267 @@
+[
+  {
+    "name": "dataset_valid_0",
+    "kind": "dataset",
+    "value": "a"
+  },
+  {
+    "name": "dataset_valid_1",
+    "kind": "dataset",
+    "value": "s-1"
+  },
+  {
+    "name": "dataset_valid_2",
+    "kind": "dataset",
+    "value": "A._9"
+  },
+  {
+    "name": "dataset_invalid_0",
+    "kind": "dataset",
+    "value": "",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "dataset_invalid_1",
+    "kind": "dataset",
+    "value": "_bad",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "dataset_invalid_2",
+    "kind": "dataset",
+    "value": "a/b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "dataset_invalid_3",
+    "kind": "dataset",
+    "value": "é",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "dataset_invalid_4",
+    "kind": "dataset",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "meta_valid_0",
+    "kind": "meta",
+    "value": "root"
+  },
+  {
+    "name": "meta_valid_1",
+    "kind": "meta",
+    "value": "com.example.select"
+  },
+  {
+    "name": "meta_valid_2",
+    "kind": "meta",
+    "value": "_root.Child"
+  },
+  {
+    "name": "meta_invalid_0",
+    "kind": "meta",
+    "value": "select",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "meta_invalid_1",
+    "kind": "meta",
+    "value": "SeLeCt",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "meta_invalid_2",
+    "kind": "meta",
+    "value": "a..b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "meta_invalid_3",
+    "kind": "meta",
+    "value": "a.1b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "meta_invalid_4",
+    "kind": "meta",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_valid_0",
+    "kind": "field",
+    "value": "recorded_at"
+  },
+  {
+    "name": "field_valid_1",
+    "kind": "field",
+    "value": "_value"
+  },
+  {
+    "name": "field_valid_2",
+    "kind": "field",
+    "value": "ID"
+  },
+  {
+    "name": "field_invalid_0",
+    "kind": "field",
+    "value": "id",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_1",
+    "kind": "field",
+    "value": "meta_id",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_2",
+    "kind": "field",
+    "value": "select",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_3",
+    "kind": "field",
+    "value": "SeLeCt",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_4",
+    "kind": "field",
+    "value": "a.b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_5",
+    "kind": "field",
+    "value": "1a",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "field_invalid_6",
+    "kind": "field",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_valid_0",
+    "kind": "object",
+    "value": "1"
+  },
+  {
+    "name": "object_valid_1",
+    "kind": "object",
+    "value": "10"
+  },
+  {
+    "name": "object_valid_2",
+    "kind": "object",
+    "value": "opaque /?%🙂"
+  },
+  {
+    "name": "object_valid_3",
+    "kind": "object",
+    "value": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+  },
+  {
+    "name": "object_invalid_0",
+    "kind": "object",
+    "value": "",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_invalid_1",
+    "kind": "object",
+    "value": "a//b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_invalid_2",
+    "kind": "object",
+    "value": "a\u0000b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_invalid_3",
+    "kind": "object",
+    "value": "ab",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_invalid_4",
+    "kind": "object",
+    "value": "ab",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "object_invalid_5",
+    "kind": "object",
+    "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_nonempty",
+    "kind": "content",
+    "value": "item"
+  },
+  {
+    "name": "content_opaque",
+    "kind": "content",
+    "value": "opaque /?%🙂"
+  },
+  {
+    "name": "content_255_bytes",
+    "kind": "content",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+    "name": "content_255_utf8_bytes",
+    "kind": "content",
+    "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééx"
+  },
+  {
+    "name": "content_empty",
+    "kind": "content",
+    "value": "",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_reserved_separator",
+    "kind": "content",
+    "value": "a//b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_nul",
+    "kind": "content",
+    "value": "a\u0000b",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_del",
+    "kind": "content",
+    "value": "ab",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_unicode_control",
+    "kind": "content",
+    "value": "ab",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_256_bytes",
+    "kind": "content",
+    "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "error": "invalid_identifier"
+  },
+  {
+    "name": "content_256_utf8_bytes",
+    "kind": "content",
+    "value": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "error": "invalid_identifier"
+  }
+]

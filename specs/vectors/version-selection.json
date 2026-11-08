@@ -1,0 +1,209 @@
+[
+  {
+    "name": "v1",
+    "advertised": [
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "1",
+    "refused": false
+  },
+  {
+    "name": "unordered numeric",
+    "advertised": [
+      "2",
+      "10",
+      "1"
+    ],
+    "supported": [
+      "1",
+      "10",
+      "2"
+    ],
+    "selected": "10",
+    "refused": false
+  },
+  {
+    "name": "intersection",
+    "advertised": [
+      "20",
+      "3",
+      "1"
+    ],
+    "supported": [
+      "1",
+      "2",
+      "3"
+    ],
+    "selected": "3",
+    "refused": false
+  },
+  {
+    "name": "server order",
+    "advertised": [
+      "3",
+      "1",
+      "2"
+    ],
+    "supported": [
+      "1",
+      "2",
+      "3"
+    ],
+    "selected": "3",
+    "refused": false
+  },
+  {
+    "name": "client order",
+    "advertised": [
+      "1",
+      "2",
+      "3"
+    ],
+    "supported": [
+      "3",
+      "1",
+      "2"
+    ],
+    "selected": "3",
+    "refused": false
+  },
+  {
+    "name": "no common",
+    "advertised": [
+      "2"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "empty client",
+    "advertised": [
+      "1"
+    ],
+    "supported": [],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "empty server",
+    "advertised": [],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "duplicate",
+    "advertised": [
+      "1",
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "leading zero",
+    "advertised": [
+      "01",
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "implementation version",
+    "advertised": [
+      "v0.1.0",
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "zero",
+    "advertised": [
+      "0",
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "negative",
+    "advertised": [
+      "-1",
+      "1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "fraction",
+    "advertised": [
+      "1.0"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "whitespace",
+    "advertised": [
+      " 1"
+    ],
+    "supported": [
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "invalid client",
+    "advertised": [
+      "1"
+    ],
+    "supported": [
+      "01",
+      "1"
+    ],
+    "selected": "",
+    "refused": true
+  },
+  {
+    "name": "unbounded integer",
+    "advertised": [
+      "999999999999999999999999",
+      "10"
+    ],
+    "supported": [
+      "10",
+      "999999999999999999999999"
+    ],
+    "selected": "999999999999999999999999",
+    "refused": false
+  }
+]

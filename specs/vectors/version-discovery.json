@@ -1,0 +1,261 @@
+[
+  {
+    "name": "absent",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "empty",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": []
+    },
+    "valid": true
+  },
+  {
+    "name": "future",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "past still served",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2000-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "additive fields",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "future": true,
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00Z",
+          "future": true
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "missing",
+    "document": {},
+    "valid": false
+  },
+  {
+    "name": "null versions",
+    "document": {
+      "protocol_versions": null
+    },
+    "valid": false
+  },
+  {
+    "name": "empty versions",
+    "document": {
+      "protocol_versions": []
+    },
+    "valid": false
+  },
+  {
+    "name": "duplicate versions",
+    "document": {
+      "protocol_versions": [
+        "1",
+        "1"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "noncanonical versions",
+    "document": {
+      "protocol_versions": [
+        "01"
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "null",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": null
+    },
+    "valid": false
+  },
+  {
+    "name": "object",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "entry null",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        null
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unadvertised",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "2",
+          "sunset": "2030-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "missing date",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "null date",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": null
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid date",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-02-30T00:00:00Z"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "date only",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "offset",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00+00:00"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "fraction",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00.1Z"
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "duplicate",
+    "document": {
+      "protocol_versions": [
+        "1"
+      ],
+      "deprecated_versions": [
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00Z"
+        },
+        {
+          "version": "1",
+          "sunset": "2030-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "valid": false
+  }
+]

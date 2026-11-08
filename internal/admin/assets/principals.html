@@ -1,0 +1,75 @@
+{{define "content"}}
+<p class="note">Accounts and services. Passwords, service secrets and token values are not stored in
+a form this page can read, and are never exported.</p>
+<table><thead><tr><th>Principal</th><th>Kind</th><th>Dataset</th><th>Read</th><th>Write</th><th>Schema</th><th>Erase</th><th>Access changes</th><th>Live authorizations</th><th>State</th></tr></thead><tbody>
+{{range $principal := .Principals}}{{range $dataset, $grants := $principal.Datasets}}<tr>
+<td class="identity" data-label="Principal">{{$principal.ID}}</td><td data-label="Kind">{{$principal.Kind}}</td>
+<td class="identity" data-label="Dataset">{{$dataset}}</td>
+<td data-label="Read">{{if $grants.Read}}yes{{else}}<span class="state">no</span>{{end}}</td>
+<td data-label="Write">{{if $grants.Write}}yes{{else}}<span class="state">no</span>{{end}}</td>
+<td data-label="Schema">{{if $grants.Schema}}yes{{else}}<span class="state">no</span>{{end}}</td>
+<td data-label="Erase">{{if $grants.Erase}}yes{{else}}<span class="state">no</span>{{end}}</td>
+<td data-label="Access changes">{{if $grants.ExpiresAt}}{{$grants.ExpiresAt.UTC.Format "2006-01-02T15:04:05Z"}}{{else}}<span class="state">never</span>{{end}}</td>
+<td data-label="Live authorizations">{{$principal.Authentications}}</td>
+<td data-label="State">{{if $principal.Suspended}}<span class="warn">suspended</span>{{else}}active{{end}}</td>
+</tr>{{else}}<tr>
+<td class="identity" data-label="Principal">{{$principal.ID}}</td><td data-label="Kind">{{$principal.Kind}}</td>
+<td colspan="8" class="state">No dataset grants.</td>
+</tr>{{end}}{{else}}<tr><td colspan="10" class="state">No principals provisioned.</td></tr>{{end}}
+</tbody></table>
+
+<h2>Suspend, reinstate, delete, or reset a password</h2>
+<p class="note">Suspending stops every credential the account holds at once and keeps them, so
+reinstating restores exactly what it had — use it for abuse or a lost device. Deleting removes the
+account and its credentials permanently and retires its name, which is never issued again. Datasets
+somebody else also administers are kept; a dataset the account is the last administrator of is
+erased with it, and only when you name it below — deleting without naming it shows you what to
+enter. Setting a password lets you sign in as the person, so it takes administering every dataset
+they hold. You may act only on accounts whose every dataset you administer, and not on your own.</p>
+<form method="post" action="/admin/principals">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>Account <input name="account" required autocomplete="off"></label>
+<label>Action <select name="action" required>
+<option value="suspend">Suspend</option>
+<option value="reinstate">Reinstate</option>
+<option value="delete">Delete permanently</option>
+<option value="reset-password">Set a new password</option>
+</select></label>
+<label>New password, only for setting one <input name="password" type="password" autocomplete="new-password"></label>
+<label>Datasets to erase, only for deleting the last administrator of them <input name="erase" autocomplete="off"></label>
+<button type="submit">Apply</button>
+</form>
+
+<h2>Registered clients</h2>
+<p class="note">A client name is supplied at registration and is unverified. Registration grants no
+access by itself.</p>
+<table><thead><tr><th>Client</th><th>Name</th><th>Kind</th><th>State</th><th>Redirects</th></tr></thead><tbody>
+{{range .Clients}}<tr>
+<td class="identity" data-label="Client">{{.ID}}</td><td data-label="Name">{{.Name}}</td>
+<td data-label="Kind">{{if .Confidential}}confidential{{else}}public{{end}}</td>
+<td data-label="State">{{if .Disabled}}<span class="warn">disabled</span>{{else}}active{{end}}</td>
+<td class="identity" data-label="Redirects">{{range .Redirects}}{{.}}<br>{{end}}</td>
+</tr>{{else}}<tr><td colspan="5" class="state">No clients registered.</td></tr>{{end}}
+</tbody></table>
+<h2>Add an account</h2>
+<p class="note">Creates a person and grants them one dataset. Adding an existing account to a second
+dataset extends it rather than replacing what it already holds. Erase is never granted unless it is
+chosen here: it is the grant that destroys a dataset.</p>
+<form method="post" action="/admin/principals">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>Account <input name="person" required autocomplete="off"></label>
+<label>Initial password <input name="password" type="password" required autocomplete="new-password"></label>
+<p class="note">Required by this form in every case, and ignored when the account already exists:
+adding an existing account to another dataset leaves its password unchanged.</p>
+<label>Dataset <select name="dataset" required>
+{{range .Datasets}}<option value="{{.ID}}">{{if .DisplayName}}{{.DisplayName}} — {{end}}{{.ID}}</option>{{end}}
+</select></label>
+<p>This account may:</p>
+<label><input type="checkbox" name="read" value="yes" checked>Read</label>
+<label><input type="checkbox" name="write" value="yes" checked>Write records</label>
+<label><input type="checkbox" name="schema" value="yes">Change schema</label>
+<label><input type="checkbox" name="erase" value="yes">Erase the dataset</label>
+<button type="submit">Add account</button>
+</form>
+
+{{end}}
