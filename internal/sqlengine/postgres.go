@@ -97,8 +97,14 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 	if exists && requireEmpty {
 		return nil, store.Refuse("conflict")
 	}
-	if !exists {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV1); err != nil {
+	var version int
+	if exists {
+		if err = tx.QueryRowContext(ctx, `SELECT "version" FROM "tessera_migration"`).Scan(&version); err != nil || version < 1 {
+			return nil, store.Refuse("not_supported")
+		}
+	}
+	if version == 0 {
+		if _, err = tx.ExecContext(ctx, migrations.PostgresCurrent); err != nil {
 			return nil, dbError(ctx, err)
 		}
 		if limits.MaxMaterializedBytes <= 0 || limits.MaxScannedRows <= 0 || limits.IdempotencyRetentionSeconds <= 0 {
@@ -116,94 +122,36 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		if e != nil {
 			return nil, e
 		}
-		// Written against the original schema, which the migrations below then
-		// reshape: a new database is created at version 1 and migrated forward
-		// like any other, so this row still carries the column that keyed it.
-		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("singleton","dataset_id","secret","next_id","watermark","limits") VALUES (1,$1,$2,$3,$4,$5)`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("dataset_id","secret","next_id","watermark","limits","display_name") VALUES ($1,$2,$3,$4,$5,'Tessera dataset')`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	}
-	var version int
-	if err = tx.QueryRowContext(ctx, `SELECT "version" FROM "tessera_migration"`).Scan(&version); err != nil || version < 1 || version > 16 {
-		return nil, store.Refuse("not_supported")
-	}
-	if version < 2 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV2); err != nil {
-			return nil, dbError(ctx, err)
+		if err = s.refreshManagedViews(ctx, tx); err != nil {
+			return nil, err
 		}
-	}
-	if version < 3 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV3); err != nil {
-			return nil, dbError(ctx, err)
+	} else if version <= 13 {
+		// Only pre-v0.1.0 databases need the historical schema steps.
+		historical := [...]string{
+			migrations.PostgresV2, migrations.PostgresV3, migrations.PostgresV4,
+			migrations.PostgresV5, migrations.PostgresV6, migrations.PostgresV7,
+			migrations.PostgresV8, migrations.PostgresV9, migrations.PostgresV10,
+			migrations.PostgresV11, migrations.PostgresV12, migrations.PostgresV13,
 		}
-	}
-	if version < 4 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV4); err != nil {
-			return nil, dbError(ctx, err)
+		for _, step := range historical[version-1:] {
+			if _, err = tx.ExecContext(ctx, step); err != nil {
+				return nil, dbError(ctx, err)
+			}
 		}
-	}
-	if version < 5 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV5); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 6 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV6); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 7 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV7); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 8 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV8); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 9 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV9); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 10 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV10); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 11 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV11); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 12 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV12); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 13 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV13); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 14 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV14); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 15 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV15); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 16 {
-		if _, err = tx.ExecContext(ctx, migrations.PostgresV16); err != nil {
+		if _, err = tx.ExecContext(ctx, migrations.PostgresManagedUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 16`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	} else if version != 16 {
+		return nil, store.Refuse("not_supported")
 	}
 	var bounds p.Limits
 	if bounds, err = storageLimits(ctx, tx); err != nil {

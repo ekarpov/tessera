@@ -162,7 +162,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		return nil, dbError(ctx, err)
 	}
 	if version == 0 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV1); err != nil {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteCurrent); err != nil {
 			return nil, dbError(ctx, err)
 		}
 		if limits.MaxMaterializedBytes <= 0 {
@@ -183,103 +183,37 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if e != nil {
 			return nil, e
 		}
-		// Written against the original schema, which the migrations below then
-		// reshape: a new database is created at version 1 and migrated forward
-		// like any other, so this row still carries the column that keyed it.
-		_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("singleton","dataset_id","secret","next_id","watermark","limits") VALUES (1,$1,$2,$3,$4,$5)`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("dataset_id","secret","next_id","watermark","limits","display_name") VALUES ($1,$2,$3,$4,$5,'Tessera dataset')`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version > 18 {
-		return nil, store.Refuse("not_supported")
-	}
-	if version < 2 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV2); err != nil {
-			return nil, dbError(ctx, err)
+		if err = s.refreshManagedViews(ctx, tx); err != nil {
+			return nil, err
 		}
-	}
-	if version < 3 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV3); err != nil {
-			return nil, dbError(ctx, err)
+	} else if version <= 15 && version > 0 {
+		// Only pre-v0.1.0 databases need the historical schema steps.
+		historical := [...]string{
+			migrations.SQLiteV2, migrations.SQLiteV3, migrations.SQLiteV4,
+			migrations.SQLiteV5, migrations.SQLiteV6, migrations.SQLiteV7,
+			migrations.SQLiteV8, migrations.SQLiteV9, migrations.SQLiteV10,
+			migrations.SQLiteV11, migrations.SQLiteV12, migrations.SQLiteV13,
+			migrations.SQLiteV14, migrations.SQLiteV15,
 		}
-	}
-	if version < 4 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV4); err != nil {
-			return nil, dbError(ctx, err)
+		for _, step := range historical[version-1:] {
+			if _, err = tx.ExecContext(ctx, step); err != nil {
+				return nil, dbError(ctx, err)
+			}
 		}
-	}
-	if version < 5 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV5); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 6 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV6); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 7 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV7); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 8 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV8); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 9 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV9); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 10 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV10); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 11 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV11); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 12 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV12); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 13 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV13); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 14 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV14); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 15 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV15); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 16 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV16); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 17 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV17); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 18 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV18); err != nil {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteManagedUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 18`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	} else if version != 18 {
+		return nil, store.Refuse("not_supported")
 	}
 	var bounds p.Limits
 	if bounds, err = storageLimits(ctx, tx); err != nil {

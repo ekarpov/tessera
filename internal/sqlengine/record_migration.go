@@ -19,7 +19,7 @@ func (s *Store) migrateRecordFields(ctx context.Context, tx *sql.Tx) error {
 	dataset, object := "", ""
 	for {
 		rows, err := tx.QueryContext(ctx, `SELECT "dataset_id","object_id","fields" FROM "tessera_objects"
-            WHERE "wire_bytes" IS NULL AND ("dataset_id","object_id")>($1,$2)
+            WHERE ("dataset_id","object_id")>($1,$2)
             ORDER BY "dataset_id","object_id" LIMIT 256`, dataset, object)
 		if err != nil {
 			return dbError(ctx, err)
@@ -58,13 +58,8 @@ func (s *Store) migrateRecordFields(ctx context.Context, tx *sql.Tx) error {
 			return dbError(ctx, err)
 		}
 	}
-	for _, statement := range []string{
-		`ALTER TABLE "tessera_objects" DROP COLUMN "fields"`,
-		`ALTER TABLE "tessera_dataset" DROP COLUMN "typed_fields"`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return dbError(ctx, err)
-		}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE "tessera_objects" DROP COLUMN "fields"`); err != nil {
+		return dbError(ctx, err)
 	}
 	return s.refreshManagedViews(ctx, tx)
 }

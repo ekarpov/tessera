@@ -1069,9 +1069,13 @@ Stop the server before provisioning, backup, restore or reset commands; they tak
 A migration that fails leaves the transaction rolled back and the server refusing to start, which is
 the same situation as a rollback: restore, or fix forward.
 
-Current schema versions are SQLite 10 and PostgreSQL 7. An upgrade that crosses them is automatic and
-needs no operator action beyond the backup, with one exception named above: every process running the
-previous version must be stopped first.
+Fresh databases create the current schema directly. A v0.1.0 database
+upgrades from SQLite schema 15 to 18 or PostgreSQL schema 13 to 16 in one
+transaction. The upgrade converts record payloads to shared typed rows,
+then drops the old payload column. The server continues to serve v1.
+Databases from before v0.1.0 still pass through the applicable historical
+steps. The intermediate schemas from development of managed storage are
+outside the upgrade path.
 
 ## Freeze a reader share
 
