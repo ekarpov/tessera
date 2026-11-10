@@ -43,6 +43,7 @@ Naming one in `optional_reads` fails at startup rather than being accepted and i
 | Capability | State | How to enable |
 | --- | --- | --- |
 | `sharing` | Implemented, read-only guests, exact concrete type grants | Advertised by the SQL engines |
+| `creator_attribution` | Implemented, opt-in creator text fields | Advertised when the dataset admits 32-byte text values |
 | `content` | Implemented, filesystem bytes | `content` in the configuration |
 | `thumbnails` | Implemented, computed per read and never stored | Advertised with `content` |
 | `current_representation` | **Not implemented** | — |

@@ -451,6 +451,10 @@ against a writer it does not control.
 
 ## 8. Record provenance
 
+The [creator field contract](../specs/tessera-protocol-v1.md#creator-fields) now defines opt-in
+creator attribution. The [scoped record access plan](scoped-record-access.md) tracks the related
+grant work. The assessment below records the original proposal.
+
 No record says who wrote it. The application can carry an author field, and the owner can write
 whatever it likes into it.
 

@@ -26,7 +26,10 @@ type Field struct {
 	// else to it. It constrains update, never deletion, and it is a rule the
 	// server applies mechanically — the store still does not know what the
 	// field means. `false` and absent are the same, and only `true` is returned.
-	Immutable   bool                       `json:"immutable,omitempty"`
+	Immutable bool `json:"immutable,omitempty"`
+	// Creator marks a text field populated by the server from the authenticated
+	// principal on insert. A caller cannot supply or change its value.
+	Creator     bool                       `json:"creator,omitempty"`
 	Roles       []string                   `json:"roles,omitempty"`
 	Annotations map[string]json.RawMessage `json:"annotations,omitempty"`
 }
@@ -76,6 +79,9 @@ func (m Meta) ValidateDeclared() error {
 		}
 		if err := f.validateScale(); err != nil {
 			return err
+		}
+		if f.Creator && f.Type != TextType {
+			return invalid("meta_invalid_field")
 		}
 		if f.MetaID != m.ID || seen[f.ID] {
 			return invalid("meta_invalid_field")
@@ -254,6 +260,9 @@ func (m Meta) ValidateSemantics(limits Limits) error {
 		return err
 	}
 	for _, f := range m.Fields {
+		if f.Creator && limits.MaxTextBytes < CreatorIDBytes {
+			return invalid("not_supported")
+		}
 		if err := validateSemantics(f.Roles, f.Annotations, limits); err != nil {
 			return err
 		}

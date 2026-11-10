@@ -744,6 +744,7 @@ Everything a client can do for itself, given the required operations above.
 | --- | --- | --- |
 | `content` | Attachments, per the [content protocol](tessera-content-v1.md). | Has no attachments. |
 | `sharing` | Grants to principals other than the owner. | Sees only its own datasets. |
+| `creator_attribution` | Server-populated [creator fields](#creator-fields). | Has no trusted creator value. |
 
 **`aggregation`, `distinct_references` and `text_matching` were on this list and are now required
 operations.** A server MUST NOT advertise them: there is no choice left to report.
@@ -770,7 +771,7 @@ rather than run forever. A client compensating MUST stop at a limit of its own a
 `query_result_limit_exceeded` a declining server would have returned. Silent compensation turns a
 missing capability into an unexplained hang.
 
-This now applies to `content` and `sharing` alone, and neither is a read a client can fake. That is
+This applies to `content`, `sharing` and `creator_attribution`, none of which a client can fake. That is
 not a coincidence: an optional capability a client *can* compensate for is one where compensation
 and operation give different answers, which is the case for making it required rather than
 documenting the gap.
@@ -962,7 +963,8 @@ A field:
 ```
 
 `meta_id` names the type that *declares* the field, which for an inherited field is an ancestor.
-A field may also carry `"immutable": true`; see [Immutable fields](#immutable-fields).
+A field may also carry `"immutable": true` or `"creator": true`. See [Immutable fields](#immutable-fields)
+and [Creator fields](#creator-fields).
 `name` is one human-readable stored string, returned unchanged by language negotiation. v1 has no
 translation write path, so servers MUST NOT advertise `locales` or promise translated schema names.
 Editing the stored name remains a schema edit.
@@ -1115,6 +1117,35 @@ so a client guarding a write with [`expect_type`](#asserting-a-schema) sees it.
 unrecognised member of a request is never ignored. So a client cannot silently get a field it believes
 is immutable and is not; it learns it at the schema write.
 
+### Creator fields
+
+A dataset advertising `creator_attribution` accepts `"creator": true` on a declared text field.
+False and absence are equivalent and the server returns only true. The property is inherited.
+A non-text creator field is refused with `400 meta_invalid_field`. A dataset offering the capability
+MUST admit text values of at least 32 bytes. Clients check the capability before sending the member.
+A server that knows the member but withholds the capability refuses the declaration with
+`403 not_supported`.
+
+On every insert, the server fills each effective creator field with the same opaque, 32-character
+lowercase hexadecimal identifier. The identifier is stable for the authenticated principal in
+that dataset, including across application authorizations and server restarts. Distinct principals
+in a dataset receive distinct identifiers with cryptographically negligible collision probability.
+Identifiers are unlinkable by value across datasets and MUST NOT encode a public account identifier
+or credential. An installation can use a dataset-keyed cryptographic derivation with a separate
+domain from other identifiers. Erasing a dataset ends the scope of its creator identifiers.
+
+Every record write supplying a creator field is refused with `400 invalid_field`, including an
+explicit null or a restatement. This applies to inserts, updates and bulk updates even if the
+bulk filter matches nothing. The server uses the authenticated writer even for insert-only grants.
+Attribution participates in projection, filtering, record versions and erasure as a stored text
+value under the usual visibility rules. A declaration opts into showing this pseudonym to readers
+who can see the field. It grants no authority to edit or delete any record.
+
+Adding a creator field to an existing type leaves it null on older records, including descendants.
+Subsequent inserts populate it. A schema update attempting to switch an existing field to or from
+creator status is refused with `400 meta_schema_error`. A confirmed removal discards stored values
+under the normal rules. A later declaration begins with no value on existing records.
+
 ### Changing a schema
 
 A create or update body carries **only the fields the type itself declares**; inherited fields are
@@ -1128,6 +1159,7 @@ never restated, and supplying one MUST be rejected with `meta_invalid_field`.
 | Field removed | Permitted. Its stored values are deleted throughout the hierarchy, atomically with the schema change. |
 | Field's `type` changed | MUST be rejected with `meta_schema_error`. Remove the field and add a new one if that is what is meant; the protocol does not convert stored values. |
 | Field's `name` changed | Permitted. Names are presentation only. |
+| Field's `creator` changed | Refused. Add a new creator field to opt in. |
 | Field's `immutable` changed | Permitted either way, and never touches a stored value. See [Immutable fields](#immutable-fields). |
 | `parent_id` changed | MUST be rejected with `meta_schema_error`. Reparenting rewrites which objects exist in which hierarchy and is not a schema edit. |
 | `id` changed | Not expressible; the path names the type. |

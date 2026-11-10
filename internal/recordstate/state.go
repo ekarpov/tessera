@@ -280,7 +280,11 @@ func (s *Store) Info(ctx context.Context, a store.Access, dataset string) (store
 		expiry := *access.ExpiresAt
 		access.ExpiresAt = &expiry
 	}
-	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: s.ReadCapabilities(), Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest("view", viewBytes(g.View)), SchemaVersion: s.digest("schema", raw)}, nil
+	capabilities := s.ReadCapabilities()
+	if s.limits.MaxTextBytes >= p.CreatorIDBytes {
+		capabilities = append(capabilities, p.CreatorAttributionCapability)
+	}
+	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: capabilities, Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest("view", viewBytes(g.View)), SchemaVersion: s.digest("schema", raw)}, nil
 }
 
 // ReadSchema evaluates a request that reads the schema and no records. This
@@ -410,7 +414,7 @@ func (s *Store) Transact(ctx context.Context, a store.Access, dataset string, fn
 		return err
 	}
 	s.neededImage, s.originals = false, nil
-	t := &transaction{ctx: ctx, engine: s, auth: grant, state: cloneState(s.state), active: true}
+	t := &transaction{ctx: ctx, engine: s, auth: grant, principal: a.Principal, state: cloneState(s.state), active: true}
 	if s.sourcedWrites {
 		t.originals = map[string]object{}
 	}
@@ -436,13 +440,14 @@ func (s *Store) Transact(ctx context.Context, a store.Access, dataset string, fn
 }
 
 type transaction struct {
-	ctx    context.Context
-	engine *Store
-	auth   store.Authorization
-	state  state
-	active bool
-	failed error
-	dirty  bool
+	ctx       context.Context
+	engine    *Store
+	auth      store.Authorization
+	principal string
+	state     state
+	active    bool
+	failed    error
+	dirty     bool
 	// streamed holds the records this evaluation read through the scan
 	// source. They live here and never in state: the image a read evaluates
 	// against may be shared rather than copied, so writing into it would be a
@@ -711,15 +716,10 @@ func (t *transaction) record(typeID, id string, o object, fields []string, inclu
 	}
 	return p.RecordSet{Watermark: t.Watermark(), Meta: meta, Records: []p.Record{{ID: p.ObjectID{ID: id, DatasetID: t.engine.id}, MetaID: o.typeID, Values: values, Version: version}}}, nil
 }
-func (t *transaction) convert(typeID string, fields map[string]p.Value) (map[string]p.Value, error) {
-	converted, _, err := t.convertDeclared(typeID, fields)
-	return converted, err
-}
 
-// convertDeclared also answers which of the named fields are immutable, so an
-// update learns it from the schema it converted against rather than resolving
-// the type a second time.
-func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value) (map[string]p.Value, map[string]bool, error) {
+// convertDeclared fills creator fields on insert and reports which supplied
+// fields are immutable for updates.
+func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool) (map[string]p.Value, map[string]bool, error) {
 	if !t.auth.View.AllowsType(typeID) && !t.auth.View.AllowsInsert(typeID) {
 		return nil, nil, store.Refuse("permission_denied")
 	}
@@ -728,14 +728,27 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value) 
 		return nil, nil, err
 	}
 	byID := map[string]p.Field{}
+	result := make(map[string]p.Value, len(fields))
+	var creator p.Value
 	for _, f := range meta.Fields {
 		byID[f.ID] = f
+		if inserting && f.Creator {
+			if creator.Type() == p.NullType {
+				// Bind to the dataset and principal, never the installation or
+				// a caller-supplied identity. Keep the principal off the wire.
+				digest := t.engine.digest("record_creator", []byte(t.principal))
+				creator, err = p.NewValue(p.TextType, digest[2:2+p.CreatorIDBytes])
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			result[f.ID] = creator
+		}
 	}
-	result := make(map[string]p.Value, len(fields))
 	var immutable map[string]bool
 	for id, v := range fields {
 		declared, ok := byID[id]
-		if !ok {
+		if !ok || declared.Creator {
 			return nil, nil, store.Refuse("invalid_field")
 		}
 		kind := declared.Type
@@ -786,7 +799,7 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 	if !owner && !(t.auth.Grants.Insert && t.auth.View.AllowsInsert(typeID)) {
 		return result, store.Refuse("permission_denied")
 	}
-	converted, err := t.convert(typeID, fields)
+	converted, _, err := t.convertDeclared(typeID, fields, true)
 	if err != nil {
 		return result, err
 	}
@@ -838,7 +851,7 @@ func (t *transaction) Update(typeID, id string, fields map[string]p.Value) (err 
 	if err != nil {
 		return err
 	}
-	converted, immutable, err := t.convertDeclared(typeID, fields)
+	converted, immutable, err := t.convertDeclared(typeID, fields, false)
 	if err != nil {
 		return err
 	}
@@ -1277,7 +1290,7 @@ func (t *transaction) UpdateMetadata(m p.Meta, confirm string) (result p.Meta, e
 			removed = append(removed, f.ID)
 			continue
 		}
-		if now.Type != f.Type {
+		if now.Type != f.Type || now.Creator != f.Creator {
 			return result, store.Refuse("meta_schema_error")
 		}
 		// A scale may be widened and never narrowed. Widening costs nothing
@@ -1357,7 +1370,7 @@ func (t *transaction) ValidateFields(typeID string, fields map[string]p.Value) e
 	if err := t.check(t.auth.Grants.Write); err != nil {
 		return err
 	}
-	_, err := t.convert(typeID, fields)
+	_, _, err := t.convertDeclared(typeID, fields, false)
 	return err
 }
 
