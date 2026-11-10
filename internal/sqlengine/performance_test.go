@@ -164,3 +164,55 @@ func pagedFixture(b *testing.B, records int) (*Store, string, string) {
 	}
 	return s, dataset.ID, typeID
 }
+
+// Measure encrypted archive export and restore of the same synthetic snapshot.
+// Seed writes, temporary path creation and fixture cleanup are outside timing.
+func BenchmarkAttributedBackupRestore(b *testing.B) {
+	const records = 1000
+	s, source, dataset := fixture(b)
+	if err := s.Transact(b.Context(), owner, dataset, func(tx store.Tx) error {
+		meta := p.Meta{ID: typeID, Fields: []p.Field{
+			{ID: "n", MetaID: typeID, Type: p.IntegerType},
+			{ID: "created_by", MetaID: typeID, Type: p.TextType, Creator: true},
+		}}
+		if _, err := tx.UpdateMetadata(meta, ""); err != nil {
+			return err
+		}
+		for i := range records {
+			n, _ := p.NewValue(p.IntegerType, int64(i))
+			if _, err := tx.Insert(typeID, map[string]p.Value{"n": n}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		b.Fatal(err)
+	}
+	backupKey := make([]byte, 32)
+	archive := filepath.Join(b.TempDir(), "source.enc")
+	if err := s.Backup(b.Context(), archive, backupKey); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("backup", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			destination := filepath.Join(b.TempDir(), "backup.enc")
+			b.StartTimer()
+			if err := s.Backup(b.Context(), destination, backupKey); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("restore", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			destination := filepath.Join(b.TempDir(), "restored.db")
+			b.StartTimer()
+			if err := RestoreBackup(b.Context(), archive, destination, "", source+".retired", backupKey); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

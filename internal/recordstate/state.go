@@ -735,6 +735,9 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 	for _, f := range meta.Fields {
 		byID[f.ID] = f
 		if inserting && f.Creator {
+			if t.engine.limits.MaxTextBytes < p.CreatorIDBytes {
+				return nil, nil, store.Refuse("not_supported")
+			}
 			if creator.Type() == p.NullType {
 				// Bind to the dataset and principal, never the installation or
 				// a caller-supplied identity. Keep the principal off the wire.

@@ -21,9 +21,6 @@ func BenchmarkAggregateScan(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err = s.EnableReads("aggregation"); err != nil {
-		b.Fatal(err)
-	}
 	if err = s.SetAuthorization(b.Context(), dataset.ID, access,
 		store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true}, View: store.FullView()}); err != nil {
 		b.Fatal(err)

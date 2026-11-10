@@ -556,7 +556,7 @@ func TestUnknownDatasetRouteIsAbsence(t *testing.T) {
 // sole names the dataset a store holds, through the composition call rather
 // than the listing: a grant has to be installed on a dataset before any listing
 // can report one.
-func sole(t *testing.T, s interface {
+func sole(t testing.TB, s interface {
 	SoleDataset(context.Context) (store.Dataset, error)
 }) string {
 	t.Helper()

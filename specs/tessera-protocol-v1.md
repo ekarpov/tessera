@@ -1122,7 +1122,8 @@ is immutable and is not; it learns it at the schema write.
 A dataset advertising `creator_attribution` accepts `"creator": true` on a declared text field.
 False and absence are equivalent and the server returns only true. The property is inherited.
 A non-text creator field is refused with `400 meta_invalid_field`. A dataset offering the capability
-MUST admit text values of at least 32 bytes. Clients check the capability before sending the member.
+MUST admit text values of at least 32 bytes. A limit change MUST preserve this minimum while the
+dataset has any creator fields. Clients check the capability before sending the member.
 If provisioning gives the client no capability information for the new dataset, it can declare
 creator fields after discovering the dataset's capabilities.
 A server that knows the member but withholds the capability refuses the declaration with

@@ -45,9 +45,8 @@ func (s *Store) DatasetLimits(ctx context.Context, dataset string) (p.Limits, er
 // bound a dataset outgrew is stored on it at creation, and without this there
 // was no way to raise it short of recreating the dataset.
 //
-// Every bound may move either way except the retention window, which may only
-// grow. A client was promised it and reconciles against it; shortening it
-// would void outcomes clients are still entitled to ask about.
+// The retention window may only grow, since clients reconcile against it.
+// A dataset with creator fields also needs room for their generated values.
 func (s *Store) SetDatasetLimits(ctx context.Context, dataset string, limits p.Limits) error {
 	if err := limits.Validate(); err != nil {
 		return err
@@ -75,6 +74,11 @@ func (s *Store) SetDatasetLimits(ctx context.Context, dataset string, limits p.L
 	if limits.IdempotencyRetentionSeconds < current.IdempotencyRetentionSeconds {
 		return store.Refuse("conflict")
 	}
+	if limits.MaxTextBytes < p.CreatorIDBytes {
+		if err = checkCreatorTextLimit(ctx, tx, dataset); err != nil {
+			return err
+		}
+	}
 	encoded, err := json.Marshal(limits)
 	if err != nil {
 		return err
@@ -86,6 +90,35 @@ func (s *Store) SetDatasetLimits(ctx context.Context, dataset string, limits p.L
 		return dbError(ctx, err)
 	}
 	return s.refreshBounds(ctx)
+}
+
+// checkCreatorTextLimit runs under the dataset write lock so a schema change
+// cannot commit a creator field between this check and the limits update.
+func checkCreatorTextLimit(ctx context.Context, tx *sql.Tx, dataset string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT "body" FROM "tessera_types" WHERE "dataset_id"=$1`, dataset)
+	if err != nil {
+		return dbError(ctx, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return dbError(ctx, err)
+		}
+		var meta p.Meta
+		if json.Unmarshal(raw, &meta) != nil {
+			return store.Refuse("internal_error")
+		}
+		for _, field := range meta.Fields {
+			if field.Creator {
+				return store.RefuseWith("conflict", "creator_text_limit", map[string]any{"minimum": p.CreatorIDBytes})
+			}
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return dbError(ctx, err)
+	}
+	return nil
 }
 
 // refreshBounds works out the storage's declared bound again from what is
