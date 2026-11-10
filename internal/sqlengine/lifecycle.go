@@ -511,7 +511,7 @@ func (s *Store) CreateDataset(ctx context.Context, a store.Access, displayName s
 	// one, in this transaction: the dataset and its types commit together or
 	// not at all, so nobody can reach a dataset that exists without them.
 	if len(types) > 0 {
-		if err = s.persist(ctx, tx, limits, image, typed, outside{}); err != nil {
+		if err = s.persist(ctx, tx, limits, image, typed, outside{}, false); err != nil {
 			return store.Created{}, err
 		}
 	}

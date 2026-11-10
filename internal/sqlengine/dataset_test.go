@@ -224,6 +224,10 @@ func demoteToSingletonSchema(t *testing.T, s *Store) {
 		// cannot be dropped while the index still names it.
 		`DROP INDEX "tessera_receipts_executor"`,
 		`DROP INDEX "tessera_receipts_retention_deadline"`,
+		`DROP VIEW "tessera_read_objects"`,
+		`DROP TABLE "tessera_field_values"`,
+		`ALTER TABLE "tessera_objects" DROP COLUMN "wire_bytes"`,
+		`ALTER TABLE "tessera_dataset" DROP COLUMN "typed_fields"`,
 		`ALTER TABLE "tessera_receipts" DROP COLUMN "retain_until"`,
 		`ALTER TABLE "tessera_receipts" DROP COLUMN "executor_id"`,
 		`ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`,

@@ -22,6 +22,7 @@ type held struct {
 	image  recordstate.Image
 	auth   store.Authorization
 	limits p.Limits
+	typed  bool
 }
 
 // load reads one dataset.
@@ -43,7 +44,8 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	var secret, bounds []byte
 	var next string
 	var schemaKey sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits","schema_cache_key" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds, &schemaKey)
+	var typed int
+	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits","schema_cache_key","typed_fields" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds, &schemaKey, &typed)
 	if err == sql.ErrNoRows {
 		// not_found means proven retirement and nothing else. Without evidence
 		// in the retirement ledger this identity may name a dataset that never
@@ -61,6 +63,7 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	if err != nil {
 		return h, dbError(ctx, err)
 	}
+	h.typed = typed != 0
 	g, err := authorization(ctx, tx, dataset, a)
 	h.auth = g
 	if err != nil {
@@ -137,7 +140,7 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	if !objects {
 		return h, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1`, dataset)
+	rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM "tessera_read_objects" WHERE "dataset_id"=$1`, dataset)
 	if err != nil {
 		return h, dbError(ctx, err)
 	}
@@ -145,10 +148,10 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		var id string
 		var row recordstate.Row
 		var raw []byte
-		if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+		if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 			break
 		}
-		if err = json.Unmarshal(raw, &row.Fields); err != nil {
+		if err = decodeStoredFields(raw, &row); err != nil {
 			break
 		}
 		image.Objects[id] = row
@@ -172,7 +175,7 @@ type outside struct {
 	bytes int
 }
 
-func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before, after recordstate.Image, rest outside) error {
+func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before, after recordstate.Image, rest outside, typed bool) error {
 	if before.Watermark == after.Watermark {
 		return nil
 	}
@@ -229,8 +232,19 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 				continue
 			}
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","fields") VALUES ($1,$2,$3,$4) ON CONFLICT ("dataset_id","object_id") DO UPDATE SET "type_id"=excluded."type_id","fields"=excluded."fields"`, dataset, id, row.TypeID, raw); err != nil {
+		var wireBytes any
+		if typed {
+			wireBytes, raw = len(raw), []byte{}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","fields","wire_bytes") VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT ("dataset_id","object_id") DO UPDATE
+            SET "type_id"=excluded."type_id","fields"=excluded."fields","wire_bytes"=excluded."wire_bytes"`, dataset, id, row.TypeID, raw, wireBytes); err != nil {
 			return dbError(ctx, err)
+		}
+		if typed {
+			if err = persistTypedFields(ctx, tx, dataset, id, old.Fields, row.Fields); err != nil {
+				return err
+			}
 		}
 	}
 	for id := range before.Objects {

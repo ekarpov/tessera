@@ -23,7 +23,7 @@ import (
 
 const maxBackupBytes = 256 << 20
 
-var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments"}
+var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values"}
 
 type backupValue struct {
 	Bytes   []byte  `json:"bytes,omitempty"`
@@ -450,7 +450,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			}
 		}
 	}
-	if !manifestFound || len(manifest.Tables) != len(backupTables) {
+	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-1) {
 		return store.Refuse("invalid_field")
 	}
 	fence, err := os.ReadFile(fencePath)
@@ -602,7 +602,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				switch value.Kind {
 				case "null":
 				case "bytes":
-					values[j] = value.Bytes
+					// Preserve an empty binary value even when the archive omitted its bytes.
+					values[j] = append([]byte{}, value.Bytes...)
 				case "text":
 					values[j] = value.Text
 				case "integer":
@@ -630,6 +631,15 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// A dataset's record count and size are worked out from the records the
 	// archive holds rather than trusted from it: they are derived, and an
 	// archive from before they were kept has none.
+	if len(manifest.Tables) == len(backupTables)-1 {
+		var typed int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_dataset" WHERE "typed_fields"<>0`).Scan(&typed); err != nil {
+			return dbError(ctx, err)
+		}
+		if typed != 0 {
+			return store.Refuse("invalid_field")
+		}
+	}
 	if err = recount(ctx, tx); err != nil {
 		return err
 	}
@@ -898,7 +908,7 @@ func datasetIdentities(ctx context.Context, tx *sql.Tx) ([]string, error) {
 func recount(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET
 		"object_count" = (SELECT count(*) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id"),
-		"object_bytes" = (SELECT coalesce(sum(length(o."fields")), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
+		"object_bytes" = (SELECT coalesce(sum(coalesce(o."wire_bytes", length(o."fields"))), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
 	if err != nil {
 		return dbError(ctx, err)
 	}
@@ -913,12 +923,16 @@ var archiveColumnFills = map[string]map[string]func() backupValue{
 	"tessera_dataset": {
 		"object_count":     zeroValue,
 		"object_bytes":     zeroValue,
-		"schema_cache_key": func() backupValue { return backupValue{Kind: "null"} },
+		"schema_cache_key": nullBackupValue,
+		"typed_fields":     zeroValue,
 	},
+	"tessera_objects": {"wire_bytes": nullBackupValue},
 	"tessera_imports": {
 		"cleaned": zeroValue,
 	},
 }
+
+func nullBackupValue() backupValue { return backupValue{Kind: "null"} }
 
 func zeroValue() backupValue {
 	zero := int64(0)

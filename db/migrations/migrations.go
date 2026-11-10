@@ -92,3 +92,9 @@ var PostgresV14 string
 
 //go:embed 016_sqlite.sql
 var SQLiteV16 string
+
+//go:embed 015_postgres.sql
+var PostgresV15 string
+
+//go:embed 017_sqlite.sql
+var SQLiteV17 string

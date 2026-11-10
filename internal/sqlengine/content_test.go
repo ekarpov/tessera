@@ -23,7 +23,18 @@ func contentMap(t *testing.T, value any, err error) map[string]any {
 	return value.(map[string]any)
 }
 func TestContentImportAttachmentAndRetirement(t *testing.T) {
+	for _, mode := range []string{"json", "typed"} {
+		t.Run(mode, func(t *testing.T) { checkContentAttachmentRetirement(t, mode == "typed") })
+	}
+}
+
+func checkContentAttachmentRetirement(t *testing.T, typed bool) {
 	s, _, dataset := fixture(t)
+	if typed {
+		if err := s.EnableTypedFields(t.Context(), owner, dataset); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := s.EnableContent(t.Context(), filepath.Join(t.TempDir(), "bytes")); err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +128,6 @@ func TestContentImportAttachmentAndRetirement(t *testing.T) {
 	if err = s.CleanupContent(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	_ = dataset
 }
 
 func TestContentStreamingLimitsAndAtomicAttachmentFailure(t *testing.T) {

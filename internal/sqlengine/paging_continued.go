@@ -53,8 +53,13 @@ func (s *Store) pageEngine(ctx context.Context, tx *sql.Tx, a store.Access, data
 	engine.SetScanFromSource(func(types []string, after string, visit func(string, recordstate.Row) (bool, error)) error {
 		return s.scanObjectsFrom(ctx, tx, dataset, types, after, visit)
 	})
+	if h.typed {
+		engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+			return s.scanObjectsWhere(ctx, tx, dataset, types, after, predicates, visit)
+		})
+	}
 	engine.SetSortedScanSource(func(types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
-		return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), types, keys, from, admit, visit)
+		return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.typed, types, keys, from, admit, visit)
 	})
 	return engine, h, nil
 }

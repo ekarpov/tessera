@@ -3,7 +3,6 @@ package sqlengine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,7 +37,7 @@ import (
 // Nulls are placed explicitly, first ascending and last descending, because
 // PostgreSQL's default is the opposite. The final tie-break is the object
 // identifier by byte order, as in scanObjects.
-func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, cut uint64, types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
+func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, cut uint64, typed bool, types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
 	if len(types) == 0 || len(keys) == 0 {
 		return false, nil
 	}
@@ -66,7 +65,11 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 	expressions := make([]string, len(keys))
 	for i, key := range keys {
 		args = append(args, key.FieldID)
-		expression, ok := s.sortExpression(key.Type, "$"+strconv.Itoa(len(args)))
+		parameter := "$" + strconv.Itoa(len(args))
+		expression, ok := s.sortExpression(key.Type, parameter)
+		if typed {
+			expression, ok = s.typedSortExpression(key.Type, parameter)
+		}
 		if !ok {
 			return false, nil
 		}
@@ -104,8 +107,14 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 	}
 	limit := "$" + strconv.Itoa(len(args)+1)
 	offset := "$" + strconv.Itoa(len(args)+2)
-	query := s.numbered(`SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE ` + selected +
-		` ORDER BY ` + strings.Join(order, ",") + ` LIMIT ` + limit + ` OFFSET ` + offset)
+	source := `"tessera_objects"`
+	bytes := `length("fields")`
+	if typed {
+		source, bytes = `"tessera_read_objects"`, `"wire_bytes"`
+	}
+	query := s.numbered(`SELECT "object_id","type_id","fields",` + bytes + ` FROM ` + source +
+		` AS "o" WHERE ` + selected + ` ORDER BY ` + strings.Join(order, ",") +
+		` LIMIT ` + limit + ` OFFSET ` + offset)
 	// Batches grow as scanObjects' do, and resume by offset rather than by
 	// key: a sort key is not unique and may be null, and the order is total
 	// only with the identity appended. Every batch runs in this transaction's
@@ -121,17 +130,16 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 			var id string
 			var row recordstate.Row
 			var raw []byte
-			if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+			if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 				rows.Close()
 				return true, dbError(ctx, err)
 			}
 			read++
-			if json.Unmarshal(raw, &row.Fields) != nil {
+			if decodeStoredFields(raw, &row) != nil {
 				rows.Close()
 				return true, store.Refuse("internal_error")
 			}
 			row.Sequence, _ = strconv.ParseUint(id, 10, 64)
-			row.Bytes = len(raw)
 			more, e := visit(id, row)
 			if e != nil || !more {
 				rows.Close()
@@ -284,4 +292,29 @@ func (s *Store) sortExpression(kind p.Type, field string) (string, bool) {
 		return value, true
 	}
 	return "", false
+}
+
+// Typed integer and date-time values have exactly the order the evaluator
+// requires. An absent field yields SQL NULL from the scalar subquery. The
+// sort reads that field without assembling the rest of each candidate.
+func (s *Store) typedSortExpression(kind p.Type, field string) (string, bool) {
+	var value string
+	switch kind {
+	case p.IntegerType:
+		value = `"v"."number"`
+	case p.DateTimeType:
+		value = `CAST("v"."data" AS TEXT)`
+		if s.postgres {
+			value = `convert_from("v"."data", 'UTF8') COLLATE "C"`
+		}
+	default:
+		return "", false
+	}
+	expression := `(SELECT ` + value + ` FROM "tessera_field_values" AS "v"
+        WHERE "v"."dataset_id"="o"."dataset_id" AND "v"."object_id"="o"."object_id"
+        AND "v"."field_id"=` + field + `)`
+	if s.postgres && kind == p.DateTimeType {
+		expression += ` COLLATE "C"`
+	}
+	return expression, true
 }

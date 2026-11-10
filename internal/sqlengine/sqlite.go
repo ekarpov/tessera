@@ -188,7 +188,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version > 16 {
+	} else if version > 17 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version < 2 {
@@ -263,6 +263,11 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 	}
 	if version < 16 {
 		if _, err = tx.ExecContext(ctx, migrations.SQLiteV16); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version < 17 {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteV17); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}
@@ -656,9 +661,14 @@ func (s *Store) read(ctx context.Context, a store.Access, dataset string, object
 		engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
 			return s.scanObjects(ctx, tx, dataset, types, visit)
 		})
+		if h.typed {
+			engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+				return s.scanObjectsWhere(ctx, tx, dataset, types, after, predicates, visit)
+			})
+		}
 		if !s.unsortedReads {
 			engine.SetSortedScanSource(func(types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
-				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), types, keys, from, admit, visit)
+				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.typed, types, keys, from, admit, visit)
 			})
 		}
 	}
@@ -684,6 +694,10 @@ func (s *Store) scanObjects(ctx context.Context, tx *sql.Tx, dataset string, typ
 // scanObjectsFrom is scanObjects starting after an identity, for a page that
 // continues a sequence from where the last one ended.
 func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, visit func(string, recordstate.Row) (bool, error)) error {
+	return s.scanObjectsWhere(ctx, tx, dataset, types, after, nil, visit)
+}
+
+func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
 	if len(types) == 0 {
 		return nil
 	}
@@ -698,10 +712,27 @@ func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string,
 	if s.postgres {
 		identity = `"object_id" COLLATE "C"`
 	}
-	resume := "$" + strconv.Itoa(len(types)+2)
-	limit := "$" + strconv.Itoa(len(types)+3)
-	query := `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1 AND "type_id" IN (` +
-		strings.Join(placeholders, ",") + `) AND ` + identity + ` > ` + resume + ` ORDER BY ` + identity + ` LIMIT ` + limit
+	scope := `"dataset_id"=$1 AND "type_id" IN (` + strings.Join(placeholders, ",") + ")"
+	for _, predicate := range predicates {
+		args = append(args, predicate.Field)
+		where := `"dataset_id"=$1 AND "kind"='integer' AND "field_id"=$` + strconv.Itoa(len(args))
+		for _, bound := range []struct {
+			operator string
+			value    *p.Value
+		}{
+			{"=", predicate.Exact}, {">=", predicate.Lower}, {"<=", predicate.Upper},
+		} {
+			if bound.value != nil {
+				args = append(args, bound.value.Payload().(int64))
+				where += ` AND "number"` + bound.operator + "$" + strconv.Itoa(len(args))
+			}
+		}
+		scope += ` AND "object_id" IN (SELECT "object_id" FROM "tessera_field_values" WHERE ` + where + ")"
+	}
+	resume := "$" + strconv.Itoa(len(args)+1)
+	limit := "$" + strconv.Itoa(len(args)+2)
+	query := s.numbered(`SELECT "object_id","type_id","fields","wire_bytes" FROM "tessera_read_objects" WHERE ` +
+		scope + ` AND ` + identity + ` > ` + resume + ` ORDER BY ` + identity + ` LIMIT ` + limit)
 	// Read in batches that start small and grow, each resuming after the last
 	// identity the one before returned. One unbounded statement let a query
 	// that stops after ten rows cost the whole type on PostgreSQL: the server
@@ -719,18 +750,17 @@ func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string,
 			var id string
 			var row recordstate.Row
 			var raw []byte
-			if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+			if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 				rows.Close()
 				return dbError(ctx, err)
 			}
 			read++
 			last = id
-			if json.Unmarshal(raw, &row.Fields) != nil {
+			if decodeStoredFields(raw, &row) != nil {
 				rows.Close()
 				return store.Refuse("internal_error")
 			}
 			row.Sequence, _ = strconv.ParseUint(id, 10, 64)
-			row.Bytes = len(raw)
 			more, e := visit(id, row)
 			if e != nil || !more {
 				rows.Close()
@@ -795,7 +825,7 @@ func (s *Store) evaluate(ctx context.Context, sqltx *sql.Tx, a store.Access, dat
 	if err != nil {
 		return err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}, h.typed); err != nil {
 		return err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -865,7 +895,7 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 	if err != nil {
 		return true, err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, rest); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, rest, h.typed); err != nil {
 		return true, err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -879,14 +909,14 @@ func fetchRow(ctx context.Context, tx *sql.Tx, dataset, id string) (recordstate.
 	var row recordstate.Row
 	var raw []byte
 	var mintedID string
-	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw)
+	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM "tessera_read_objects" WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw, &row.Bytes)
 	if err == sql.ErrNoRows {
 		return row, false, nil
 	}
 	if err != nil {
 		return row, false, dbError(ctx, err)
 	}
-	if json.Unmarshal(raw, &row.Fields) != nil {
+	if decodeStoredFields(raw, &row) != nil {
 		return row, false, store.Refuse("internal_error")
 	}
 	row.Sequence, _ = strconv.ParseUint(mintedID, 10, 64)
