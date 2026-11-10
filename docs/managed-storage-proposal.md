@@ -54,6 +54,7 @@ Names and columns below are logical. Physical migrations are a later step.
 | `meta_installation` | `(dataset_id, local_type_id)`. Source type and pinned revision, physical layout when managed, and dependency bindings. |
 | `dataset_meta`, `dataset_meta_fields` | Dataset and local type keys. Private types and user-owned field additions. |
 | `meta_layout`, `meta_index` | Generated layout and index identities, approved logical field bindings, and provisioning state. Table and column names are assigned by the server. |
+| `meta_operation` | Operation ID, caller and request digest, approved target, and durable job state. Long-running operations record progress per dataset. |
 | `record_identity` | `(dataset_id, object_id)` for the reference implementation. Concrete local type and storage route. Keeps identity-based access and attachment relationships independent of physical placement. |
 | One managed table per admin-published type | `(dataset_id, object_id)`. Typed columns for fields declared on that type. A child row joins to its parent with both keys. An ancestor row can be addressed by concrete type for exact and descendant queries. |
 | `custom_fields` | `(dataset_id, object_id)`. JSON extensions for records with a managed ancestor. |
@@ -82,6 +83,10 @@ outside the existing v1 data surface.
 | `ShareDefinition(revision, recipient)`, `RevokeDefinitionShare(share_id)` | Owner-controlled discovery and install authority for a private definition. |
 | `InstallTypes(dataset, revisions, profile, operation_key)` | Validate source visibility and destination authority. Install the requested definitions and required parents atomically. Reuse an identical install and report a conflict for an unrelated local type with the same ID. |
 | `UpgradeTypes(dataset, expected_revisions, target_revisions, operation_key)` | Apply compatible updates explicitly, including a managed rollout. Refuse collisions with user fields. Preserve existing data and verify the effective schema before commit. |
+| `RetireType(type_identity, expected_revision, operation_key)` | Admin-only. Close a managed type to new installations while keeping existing installations and records usable. |
+| `PlanTypeDeletion(type_identity, cascade_descendants)` | Admin-only, read-only preview. Report the affected installations, records and dependent types across the deployment. |
+| `DeleteManagedType(plan_id, confirmation, operation_key)` | Admin-only. Accept a current, explicitly confirmed plan and return a durable deletion job ID. |
+| `GetMetadataOperation(operation_id)` | Read authorized job status and the outcome of a retry or lost response. |
 
 An app supplies a structured storage profile at setup. It names typed fields
 and declares composite indexes by logical field, order and intended scope.
@@ -99,6 +104,57 @@ collation, null order and an object-ID tie-break where required by the query.
 An inherited or cross-table sort may need a supported lookup index or the
 existing evaluator. A physical index is a performance option and does not
 change the operations the API accepts.
+
+## Managed type deletion
+
+The target is a stable managed identity such as `(catalog_id, type_id)`, across
+its installed revisions. A display name or matching local ID is insufficient.
+Unrelated private definitions and independent copies are outside that target.
+The existing v1 dataset-local type deletion keeps its dataset scope.
+
+1. The preview identifies affected datasets and installations, counts records
+   by concrete type, and lists dependent managed and private descendants.
+   The default refuses deletion when descendants exist. A cascade requires
+   a preview with `cascade_descendants=true` and explicit confirmation of that
+   plan. This includes the descendants' records and custom fields.
+2. Execution checks that the confirmation names the target and plan, verifies
+   that the affected scope and reviewed impact are still current, and refuses
+   a stale plan. It then durably fences the scope against new installations
+   and writes, including concurrent transactions, before scheduling deletion.
+   The operation key binds the request digest to one job.
+3. Each dataset commits its own deletion atomically. Remove the targeted
+   records, identities, extension values, type installations and dependent
+   local definitions. Apply the existing record and attachment lifecycle.
+   Remove affected grants, invalidate affected cursors, and suppress purged
+   record bodies in replayable responses while preserving receipt identities
+   and request digests. Publish the dataset's new schema version and watermark. An interrupted
+   job resumes with the fence in place. Progress is visible per dataset,
+   since the whole deployment is not one transaction.
+4. Keep the durable deletion record outside restorable snapshots, so a
+   restore cannot bring back purged definitions or records. A physical table
+   becomes eligible for removal once the job is complete and no surviving
+   layout uses it. A retired type with active installations keeps its tables.
+
+## Querying user-defined fields
+
+Each user-added field has a logical type in the dataset's effective metadata.
+JSON is its physical representation. The existing v1 query can filter a
+custom integer by equality or range, sort it, and aggregate it where v1
+supports that operation. A missing value follows v1 null rules. A field
+declared only on a descendant is queried through a type whose effective
+schema includes it.
+
+This is distinct from a field declared as the opaque v1 `json` type.
+Equality compares its exact stored string under the current contract. The
+query API does not search inside that value or expose JSON paths.
+
+Start with the existing evaluator and query limits for custom fields. An
+unindexed query may scan matching records in the authorized scope and fail
+at the declared bound. If a deployment needs to accelerate a frequently
+queried custom field, evaluate a bounded shared typed lookup keyed by dataset,
+declaring field and object identity. Maintain it transactionally and keep
+query semantics identical. A user field does not require a new SQL column
+or an index per dataset.
 
 ## Execution and lifecycle
 
@@ -128,3 +184,5 @@ change the operations the API accepts.
    destination installation as separate permissions.
 3. Confirm an additive provisioning API and an unchanged v1 data API, with
    PostgreSQL and SQLite evaluated against the same compatibility baseline.
+4. Confirm separate retire and delete operations, the default refusal for
+   dependent types, and the fence and restore guarantees for a cascade.
