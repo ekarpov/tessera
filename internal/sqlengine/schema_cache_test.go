@@ -61,8 +61,12 @@ func TestSchemaCacheSharesDefinitionsAndTracksEdits(t *testing.T) {
 				t.Fatal("identical datasets did not share a schema key")
 			}
 			check(first, 1)
+			if _, ok := s.schemas.get(original); !ok {
+				t.Fatal("first read did not populate the cache")
+			}
+			entries := len(s.schemas.entries)
 			check(second, 1)
-			if len(s.schemas.entries) != 1 {
+			if len(s.schemas.entries) != entries {
 				t.Fatal("identical datasets did not share a cache entry")
 			}
 			parent.Fields = append(parent.Fields, p.Field{ID: "new_field", MetaID: parent.ID, Type: p.TextType})
