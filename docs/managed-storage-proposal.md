@@ -57,18 +57,21 @@ Names and columns below are logical. Physical migrations are a later step.
 | `meta_operation` | Operation ID, caller and request digest, approved target, and durable job state. Long-running operations record progress per dataset. |
 | `record_identity` | `(dataset_id, object_id)` for the reference implementation. Concrete local type and storage route. Keeps identity-based access and attachment relationships independent of physical placement. |
 | One managed table per admin-published type | `(dataset_id, object_id)`. Typed columns for fields declared on that type. A child row joins to its parent with both keys. An ancestor row can be addressed by concrete type for exact and descendant queries. |
-| `custom_fields` | `(dataset_id, object_id)`. JSON extensions for records with a managed ancestor. |
-| `custom_objects` | `(dataset_id, object_id)`. Shared JSON storage for records with no managed ancestor. Existing generic storage is the starting point for this route. |
+| `custom_field_values` | `(dataset_id, object_id, field_key)`. One row per populated custom field, using a typed value column. The row refers to `record_identity` and to the dataset's field definition. |
 
 A managed child uses a root row for its inherited timestamp and a child row
 for its declared fields. A private descendant reuses those rows and stores
-its own fields in `custom_fields`. Adding a private type requires no DDL.
-Every dataset adopting a managed layout can reuse the same physical tables.
+its own fields in `custom_field_values`. A record with no managed ancestor
+uses `record_identity` and the same shared values table. Adding a private
+type or field requires no DDL. Every dataset adopting a managed layout can
+reuse the same physical tables.
 
 Cache immutable shared revisions by catalog and revision. Cache sparse dataset
-overlays separately. Resolve both against the same database snapshot as the
-records. A revision change invalidates the affected mapping. Every request
-still checks current record and metadata visibility for the caller.
+overlays separately. Resolve the effective type to its root and child tables,
+managed columns, and custom field keys. The physical names are server-owned.
+Resolve the mapping against the same database snapshot as the records. A
+revision change invalidates the affected mapping. Every request still checks
+current record and metadata visibility for the caller.
 
 ## Proposed methods
 
@@ -96,7 +99,7 @@ before provisioning. An approved compatible layout is shared across datasets.
 A dataset install selects from approved layouts and cannot create a new table
 or index per tenant. A request for an unsupported storage choice fails during
 planning. An ordinary client can continue to create and query types through
-v1 and use the generic layout.
+v1. New custom types on the new storage path use the shared values table.
 
 Start with bounded indexes on fields within one physical table. Tessera
 generates and quotes physical identifiers. It adds dataset scope, compatible
@@ -135,26 +138,32 @@ The existing v1 dataset-local type deletion keeps its dataset scope.
    becomes eligible for removal once the job is complete and no surviving
    layout uses it. A retired type with active installations keeps its tables.
 
-## Querying user-defined fields
+## Typed custom fields and query planning
 
-Each user-added field has a logical type in the dataset's effective metadata.
-JSON is its physical representation. The existing v1 query can filter a
-custom integer by equality or range, sort it, and aggregate it where v1
-supports that operation. A missing value follows v1 null rules. A field
-declared only on a descendant is queried through a type whose effective
-schema includes it.
+On the proposed storage path, custom values have one authoritative copy in
+`custom_field_values`. The field key identifies the declaring field within
+the dataset, so descendants reuse the same key for an inherited field.
+Metadata selects one value column, such as text, integer, exact decimal, or
+timestamp. A missing value has no row. A field declared as opaque v1 `json`
+retains its exact string and whole-value comparison semantics.
 
-This is distinct from a field declared as the opaque v1 `json` type.
-Equality compares its exact stored string under the current contract. The
-query API does not search inside that value or expose JSON paths.
+A shared index such as `(dataset_id, field_key, integer_value, object_id)`
+supports an integer equality or range filter without parsing record payloads.
+A declared custom field uses the existing v1 filter, sort, projection and
+aggregation rules for its logical type. The plan accounts for absent values
+when filtering or sorting nulls, preserves exact decimals, and joins values
+by dataset as well as object identity. Multiple custom predicates can require
+multiple lookups. Index coverage is subject to the deployment's limits and
+measured write cost.
 
-Start with the existing evaluator and query limits for custom fields. An
-unindexed query may scan matching records in the authorized scope and fail
-at the declared bound. If a deployment needs to accelerate a frequently
-queried custom field, evaluate a bounded shared typed lookup keyed by dataset,
-declaring field and object identity. Maintain it transactionally and keep
-query semantics identical. A user field does not require a new SQL column
-or an index per dataset.
+For a supported query shape, Tessera builds one parameterized SQL statement
+from the cached mapping. A point read joins managed rows and custom values
+by `(dataset_id, object_id)`. A list first selects authorized record IDs
+using the query's predicates and ordering, including any custom fields used
+for filtering or sorting. It applies the record limit there, then joins the
+projected values. The query can combine compatible branches for descendant
+types. Tessera assembles each record from its rows and retains the existing
+evaluator for query shapes without an equivalent SQL plan.
 
 ## Execution and lifecycle
 
@@ -162,10 +171,11 @@ or an index per dataset.
   arithmetic, and cursor semantics. Push down only plans that preserve those
   rules. Apply authorized concrete-type scope before ranking, counting or
   pagination. Keep exact decimal bounds and rounding behavior across layouts.
-- Write identity, parent and child rows, JSON extensions, attachments, receipt
-  and watermark in one transaction. A nullable managed field can be added
-  without rewriting existing records. Older clients' partial writes continue
-  to preserve values they omit.
+- Use the same mapping for inserts. Allocate the record ID, write identity
+  and managed ancestor and child rows, and batch custom values into multi-row
+  inserts. Commit them with attachments, the receipt and the watermark in one
+  transaction. A nullable managed field can be added without rewriting old
+  records. Partial writes preserve omitted fields.
 - Treat physical publication as recoverable deployment work. Bound concurrent
   DDL and make index creation separately observable. Keep old revisions usable
   while installed datasets still depend on them. Inventory generated tables for
@@ -173,8 +183,9 @@ or an index per dataset.
   all layouts and preserves the existing retirement fence.
 - Introduce the layout for new opted-in installs first. Keep current datasets
   on their existing path until migration and rollback have been verified.
-  The typed storage benchmark supplies read-cost evidence for the candidate
-  layout. It does not establish write cost or migration safety.
+  The typed storage benchmark supplies read-cost evidence for the managed
+  layout. The shared values table still needs measurements against legacy JSON
+  for point reads, selective and multi-field filters, writes, and storage.
 
 ## Decisions for review
 
@@ -186,3 +197,5 @@ or an index per dataset.
    PostgreSQL and SQLite evaluated against the same compatibility baseline.
 4. Confirm separate retire and delete operations, the default refusal for
    dependent types, and the fence and restore guarantees for a cascade.
+5. Use typed rows as the sole custom-field storage for the new layout. Measure
+   the read and write tradeoffs before deciding which shared indexes to ship.
