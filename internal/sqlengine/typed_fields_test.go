@@ -12,9 +12,6 @@ import (
 func TestTypedFieldsBackupAndWireValues(t *testing.T) {
 	s, path, dataset := fixture(t)
 	ctx := t.Context()
-	if err := s.EnableTypedFields(ctx, owner, dataset); err != nil {
-		t.Fatal(err)
-	}
 	const typeID = "test.typed_fields"
 	fields := map[string]p.Value{}
 	declared := []p.Field{}
@@ -61,14 +58,13 @@ func TestTypedFieldsBackupAndWireValues(t *testing.T) {
 	}
 	check := func(engine *Store) {
 		t.Helper()
-		var count, payloadBytes int
-		if err := engine.db.QueryRowContext(ctx, `SELECT length("fields"),
-		  (SELECT count(*) FROM "tessera_field_values" WHERE "dataset_id"=$1 AND "object_id"=$2)
-		  FROM "tessera_objects" WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, object).Scan(&payloadBytes, &count); err != nil {
+		var count int
+		if err := engine.db.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_field_values"
+            WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, object).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
-		if payloadBytes != 0 || count != len(fields) {
-			t.Fatalf("typed record contains a duplicate payload or missing fields: %d %d", payloadBytes, count)
+		if count != len(fields) {
+			t.Fatalf("typed record has %d fields, want %d", count, len(fields))
 		}
 		if err := engine.ReadRecord(ctx, owner, dataset, func(tx store.Tx) error {
 			set, err := tx.Object(typeID, object, nil)
@@ -118,7 +114,7 @@ func TestTypedFieldsBackupAndWireValues(t *testing.T) {
 	}
 }
 
-func TestTypedFieldsProvisioningRefusesExistingRecordsAndGuests(t *testing.T) {
+func TestManagedProvisioningRefusesExistingRecordsAndGuests(t *testing.T) {
 	s, _, dataset := fixture(t)
 	ctx := t.Context()
 	guest := store.Access{Principal: "guest", Authorization: "reader"}
@@ -127,13 +123,13 @@ func TestTypedFieldsProvisioningRefusesExistingRecordsAndGuests(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnableTypedFields(ctx, guest, dataset); p.ErrorCode(err) != "permission_denied" {
+	if err := s.InstallManagedTypes(ctx, guest, dataset, []string{typeID}); p.ErrorCode(err) != "permission_denied" {
 		t.Fatalf("guest changed the storage layout: %v", err)
 	}
 	if _, err := s.Mutate(ctx, owner, mutation(t, dataset, "", insertBody)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnableTypedFields(ctx, owner, dataset); p.ErrorCode(err) != "conflict" {
+	if err := s.InstallManagedTypes(ctx, owner, dataset, []string{typeID}); p.ErrorCode(err) != "conflict" {
 		t.Fatalf("populated dataset accepted an in-place switch: %v", err)
 	}
 }

@@ -38,6 +38,7 @@ type Store struct {
 	// sortHook, when a test sets it, is told each time a sorted query is
 	// answered in SQL order, so a test can tell it was not the fallback.
 	sortHook     func()
+	managed      managedCache
 	schemas      schemaCache
 	db, reader   *sql.DB
 	lock         *os.File
@@ -188,7 +189,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version > 17 {
+	} else if version > 18 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version < 2 {
@@ -269,6 +270,14 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 	if version < 17 {
 		if _, err = tx.ExecContext(ctx, migrations.SQLiteV17); err != nil {
 			return nil, dbError(ctx, err)
+		}
+	}
+	if version < 18 {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteV18); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.migrateRecordFields(ctx, tx); err != nil {
+			return nil, err
 		}
 	}
 	var bounds p.Limits
@@ -657,18 +666,18 @@ func (s *Store) read(ctx context.Context, a store.Access, dataset string, object
 		// Built without the records, so a request for one by identity reads
 		// that row and stops. An evaluation that would scan is refused by the
 		// wrapper the caller supplied rather than answered from what is here.
-		engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) { return fetchRow(ctx, tx, dataset, id) })
-		engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-			return s.scanObjects(ctx, tx, dataset, types, visit)
+		engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) {
+			return fetchRow(ctx, tx, h.managed.source, dataset, id)
 		})
-		if h.typed {
-			engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
-				return s.scanObjectsWhere(ctx, tx, dataset, types, after, predicates, visit)
-			})
-		}
+		engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
+			return s.scanObjectsWhere(ctx, tx, dataset, types, "", h.managed, nil, visit)
+		})
+		engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+			return s.scanObjectsWhere(ctx, tx, dataset, types, after, h.managed, predicates, visit)
+		})
 		if !s.unsortedReads {
 			engine.SetSortedScanSource(func(types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
-				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.typed, types, keys, from, admit, visit)
+				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.managed, types, keys, from, admit, visit)
 			})
 		}
 	}
@@ -694,10 +703,10 @@ func (s *Store) scanObjects(ctx context.Context, tx *sql.Tx, dataset string, typ
 // scanObjectsFrom is scanObjects starting after an identity, for a page that
 // continues a sequence from where the last one ended.
 func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, visit func(string, recordstate.Row) (bool, error)) error {
-	return s.scanObjectsWhere(ctx, tx, dataset, types, after, nil, visit)
+	return s.scanObjectsWhere(ctx, tx, dataset, types, after, s.readPlan(nil, nil), nil, visit)
 }
 
-func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, managed managedPlan, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
 	if len(types) == 0 {
 		return nil
 	}
@@ -714,8 +723,13 @@ func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string
 	}
 	scope := `"dataset_id"=$1 AND "type_id" IN (` + strings.Join(placeholders, ",") + ")"
 	for _, predicate := range predicates {
-		args = append(args, predicate.Field)
-		where := `"dataset_id"=$1 AND "kind"='integer' AND "field_id"=$` + strconv.Itoa(len(args))
+		table, column, where := managed.values+" AS v", `"number"`, `"dataset_id"=$1 AND "kind"='integer'`
+		if layout, fieldColumn, ok := managed.mapping.field(types, predicate.Field, p.IntegerType); ok {
+			table, column, where = layout.table(), fieldColumn, `"dataset_id"=$1`
+		} else {
+			args = append(args, predicate.Field)
+			where += ` AND "field_id"=$` + strconv.Itoa(len(args))
+		}
 		for _, bound := range []struct {
 			operator string
 			value    *p.Value
@@ -724,14 +738,14 @@ func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string
 		} {
 			if bound.value != nil {
 				args = append(args, bound.value.Payload().(int64))
-				where += ` AND "number"` + bound.operator + "$" + strconv.Itoa(len(args))
+				where += " AND " + column + bound.operator + "$" + strconv.Itoa(len(args))
 			}
 		}
-		scope += ` AND "object_id" IN (SELECT "object_id" FROM "tessera_field_values" WHERE ` + where + ")"
+		scope += ` AND "object_id" IN (SELECT "object_id" FROM ` + table + " WHERE " + where + ")"
 	}
 	resume := "$" + strconv.Itoa(len(args)+1)
 	limit := "$" + strconv.Itoa(len(args)+2)
-	query := s.numbered(`SELECT "object_id","type_id","fields","wire_bytes" FROM "tessera_read_objects" WHERE ` +
+	query := s.numbered(`SELECT "object_id","type_id","fields","wire_bytes" FROM ` + managed.source + ` AS o WHERE ` +
 		scope + ` AND ` + identity + ` > ` + resume + ` ORDER BY ` + identity + ` LIMIT ` + limit)
 	// Read in batches that start small and grow, each resuming after the last
 	// identity the one before returned. One unbounded statement let a query
@@ -825,7 +839,7 @@ func (s *Store) evaluate(ctx context.Context, sqltx *sql.Tx, a store.Access, dat
 	if err != nil {
 		return err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}, h.typed); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}, h.managed.mapping); err != nil {
 		return err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -860,10 +874,10 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 		if s.fetchHook != nil {
 			s.fetchHook()
 		}
-		return fetchRow(ctx, sqltx, dataset, id)
+		return fetchRow(ctx, sqltx, h.managed.source, dataset, id)
 	})
 	engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-		return s.scanObjects(ctx, sqltx, dataset, types, visit)
+		return s.scanObjectsWhere(ctx, sqltx, dataset, types, "", h.managed, nil, visit)
 	})
 	engine.EnableSourcedWrites()
 	if s.contentDir != "" {
@@ -895,7 +909,7 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 	if err != nil {
 		return true, err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, rest, h.typed); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, rest, h.managed.mapping); err != nil {
 		return true, err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -905,11 +919,11 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 }
 
 // fetchRow reads one record by identity.
-func fetchRow(ctx context.Context, tx *sql.Tx, dataset, id string) (recordstate.Row, bool, error) {
+func fetchRow(ctx context.Context, tx *sql.Tx, source, dataset, id string) (recordstate.Row, bool, error) {
 	var row recordstate.Row
 	var raw []byte
 	var mintedID string
-	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM "tessera_read_objects" WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw, &row.Bytes)
+	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM `+source+` AS o WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw, &row.Bytes)
 	if err == sql.ErrNoRows {
 		return row, false, nil
 	}

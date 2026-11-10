@@ -124,7 +124,7 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		}
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, `SELECT "version" FROM "tessera_migration"`).Scan(&version); err != nil || version < 1 || version > 15 {
+	if err = tx.QueryRowContext(ctx, `SELECT "version" FROM "tessera_migration"`).Scan(&version); err != nil || version < 1 || version > 16 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version < 2 {
@@ -195,6 +195,14 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 	if version < 15 {
 		if _, err = tx.ExecContext(ctx, migrations.PostgresV15); err != nil {
 			return nil, dbError(ctx, err)
+		}
+	}
+	if version < 16 {
+		if _, err = tx.ExecContext(ctx, migrations.PostgresV16); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.migrateRecordFields(ctx, tx); err != nil {
+			return nil, err
 		}
 	}
 	var bounds p.Limits

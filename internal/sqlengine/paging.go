@@ -86,9 +86,11 @@ func (s *Store) beginSnapshot(ctx context.Context, a store.Access, dataset, type
 	if err != nil {
 		return store.PageStart{}, err
 	}
-	engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) { return fetchRow(ctx, tx, dataset, id) })
+	engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) {
+		return fetchRow(ctx, tx, h.managed.source, dataset, id)
+	})
 	engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-		return s.scanObjects(ctx, tx, dataset, types, visit)
+		return s.scanObjectsWhere(ctx, tx, dataset, types, "", h.managed, nil, visit)
 	})
 	var result p.RecordSet
 	if err = engine.Evaluate(ctx, a, dataset, func(core store.Tx) error {

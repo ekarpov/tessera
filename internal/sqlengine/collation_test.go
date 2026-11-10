@@ -54,8 +54,8 @@ func TestStreamingReadsFollowByteOrderWhateverTheDatabaseCollation(t *testing.T)
 	// puts every capital before every lower-case letter and puts `_` between
 	// them, where a locale typically interleaves case and ignores the `_`.
 	for _, id := range []string{"a", "B", "_z", "Z", "b", "A"} {
-		if _, err = admin.ExecContext(t.Context(), `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","fields") VALUES ($1,$2,$3,$4)`,
-			dataset.ID, id, typeID, []byte(`{}`)); err != nil {
+		if _, err = admin.ExecContext(t.Context(), `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","wire_bytes") VALUES ($1,$2,$3,$4)`,
+			dataset.ID, id, typeID, 2); err != nil {
 			t.Fatal(err)
 		}
 	}

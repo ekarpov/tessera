@@ -26,7 +26,7 @@ func TestOnlineBackupPinsExactPrefixesWithoutBlockingTransfers(t *testing.T) {
 		if os.Getenv("TESSERA_TEST_POSTGRES_DSN") == "" {
 			t.Skip("needs PostgreSQL")
 		}
-		for _, mode := range []string{"json", "typed"} {
+		for _, mode := range []string{"shared", "managed"} {
 			t.Run(mode, func(t *testing.T) {
 				postgresAdmin(t)
 				s := postgresFixture(t)
@@ -34,16 +34,16 @@ func TestOnlineBackupPinsExactPrefixesWithoutBlockingTransfers(t *testing.T) {
 				if err := s.SetAuthorization(t.Context(), d, owner, store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true}, View: store.FullView()}); err != nil {
 					t.Fatal(err)
 				}
-				if mode == "typed" {
-					if err := s.EnableTypedFields(t.Context(), owner, d); err != nil {
-						t.Fatal(err)
-					}
-				}
 				if err := s.Transact(t.Context(), owner, d, func(tx store.Tx) error {
 					_, e := tx.CreateMetadata(p.Meta{ID: typeID, Fields: []p.Field{{ID: "n", MetaID: typeID, Type: p.IntegerType}}})
 					return e
 				}); err != nil {
 					t.Fatal(err)
+				}
+				if mode == "managed" {
+					if err := s.InstallManagedTypes(t.Context(), owner, d, []string{typeID}); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if err := s.EnableContent(t.Context(), filepath.Join(t.TempDir(), "bytes")); err != nil {
 					t.Fatal(err)

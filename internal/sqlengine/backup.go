@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ import (
 
 const maxBackupBytes = 256 << 20
 
-var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values"}
+var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations"}
 
 type backupValue struct {
 	Bytes   []byte  `json:"bytes,omitempty"`
@@ -240,7 +241,12 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 	manifest := backupManifest{Limits: s.bounds(), Capture: capture}
 	total := 0
 	for _, name := range backupTables {
-		rows, e := tx.QueryContext(ctx, `SELECT * FROM "`+name+`"`)
+		source := name
+		if name == "tessera_field_values" {
+			// Managed columns are flattened in the encrypted archive.
+			source = "tessera_all_field_values"
+		}
+		rows, e := tx.QueryContext(ctx, `SELECT * FROM "`+source+`"`)
 		if e != nil {
 			return dbError(ctx, e)
 		}
@@ -450,7 +456,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			}
 		}
 	}
-	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-1) {
+	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-2 && len(manifest.Tables) != len(backupTables)-3) {
 		return store.Refuse("invalid_field")
 	}
 	fence, err := os.ReadFile(fencePath)
@@ -524,6 +530,16 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		if table.Name != backupTables[i] {
 			return store.Refuse("invalid_field")
 		}
+		var legacyPayloads [][]byte
+		switch table.Name {
+		case "tessera_dataset":
+			stripBackupColumn(&table, "typed_fields")
+		case "tessera_objects":
+			legacyPayloads, err = normalizeObjectArchive(&table)
+			if err != nil {
+				return err
+			}
+		}
 		actual, err := tx.QueryContext(ctx, `SELECT * FROM "`+table.Name+`" LIMIT 0`)
 		if err != nil {
 			return dbError(ctx, err)
@@ -593,7 +609,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			parameters[i] = "$" + strconv.Itoa(i+1)
 		}
 		marks := strings.Join(parameters, ",")
-		for _, row := range table.Rows {
+		for index, row := range table.Rows {
 			if len(row) != len(columns) {
 				return store.Refuse("invalid_field")
 			}
@@ -615,6 +631,16 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			if _, err = tx.ExecContext(ctx, `INSERT INTO "`+table.Name+`" VALUES (`+marks+`)`, values...); err != nil {
 				return dbError(ctx, err)
 			}
+			if len(legacyPayloads) != 0 && legacyPayloads[index] != nil {
+				dataset, datasetOK := values[slices.Index(columns, "dataset_id")].(*string)
+				id, idOK := values[slices.Index(columns, "object_id")].(*string)
+				if !datasetOK || !idOK || dataset == nil || id == nil {
+					return store.Refuse("invalid_field")
+				}
+				if err = importLegacyFields(ctx, tx, *dataset, *id, legacyPayloads[index]); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	// A restored copy is a distinct storage and every dataset in it gets its own
@@ -631,14 +657,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// A dataset's record count and size are worked out from the records the
 	// archive holds rather than trusted from it: they are derived, and an
 	// archive from before they were kept has none.
-	if len(manifest.Tables) == len(backupTables)-1 {
-		var typed int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_dataset" WHERE "typed_fields"<>0`).Scan(&typed); err != nil {
-			return dbError(ctx, err)
-		}
-		if typed != 0 {
-			return store.Refuse("invalid_field")
-		}
+	if err = s.restoreManagedRows(ctx, tx); err != nil {
+		return err
 	}
 	if err = recount(ctx, tx); err != nil {
 		return err
@@ -908,7 +928,7 @@ func datasetIdentities(ctx context.Context, tx *sql.Tx) ([]string, error) {
 func recount(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET
 		"object_count" = (SELECT count(*) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id"),
-		"object_bytes" = (SELECT coalesce(sum(coalesce(o."wire_bytes", length(o."fields"))), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
+		"object_bytes" = (SELECT coalesce(sum(o."wire_bytes"), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
 	if err != nil {
 		return dbError(ctx, err)
 	}
@@ -924,9 +944,8 @@ var archiveColumnFills = map[string]map[string]func() backupValue{
 		"object_count":     zeroValue,
 		"object_bytes":     zeroValue,
 		"schema_cache_key": nullBackupValue,
-		"typed_fields":     zeroValue,
+		"managed_key":      nullBackupValue,
 	},
-	"tessera_objects": {"wire_bytes": nullBackupValue},
 	"tessera_imports": {
 		"cleaned": zeroValue,
 	},

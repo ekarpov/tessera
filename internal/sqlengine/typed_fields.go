@@ -16,47 +16,6 @@ import (
 	"github.com/ekarpov/tessera/pkg/store"
 )
 
-// EnableTypedFields selects typed value storage before a dataset has records.
-// The host supplies this option during provisioning. No record API changes.
-func (s *Store) EnableTypedFields(ctx context.Context, a store.Access, dataset string) error {
-	if err := s.enter(); err != nil {
-		return err
-	}
-	defer s.life.RUnlock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return dbError(ctx, err)
-	}
-	defer tx.Rollback()
-	if err = s.serializeWrites(ctx, tx, dataset); err != nil {
-		return err
-	}
-	h, err := s.load(ctx, tx, a, dataset, false)
-	if err != nil {
-		return err
-	}
-	if !h.auth.Grants.Schema || !h.auth.View.Full() {
-		return store.Refuse("permission_denied")
-	}
-	if h.typed {
-		return nil
-	}
-	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT "object_count" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&count); err != nil {
-		return dbError(ctx, err)
-	}
-	if count != 0 {
-		return store.Refuse("conflict")
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "typed_fields"=1 WHERE "dataset_id"=$1`, dataset); err != nil {
-		return dbError(ctx, err)
-	}
-	if err = tx.Commit(); err != nil {
-		return dbError(ctx, err)
-	}
-	return nil
-}
-
 func fieldParts(value p.Value) (number any, data []byte) {
 	switch payload := value.Payload().(type) {
 	case int64:
@@ -116,9 +75,6 @@ func (f typedField) value() (p.Value, error) {
 }
 
 func decodeStoredFields(raw []byte, row *recordstate.Row) error {
-	if len(raw) == 0 || raw[0] != '[' {
-		return json.Unmarshal(raw, &row.Fields)
-	}
 	var fields []typedField
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
