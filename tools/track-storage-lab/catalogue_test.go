@@ -118,23 +118,23 @@ func TestTrackCatalogueOnReleasedRoutes(t *testing.T) {
 		DatasetID string `json:"dataset_id"`
 	}
 	request(http.MethodPost, "/v1/datasets", map[string]any{"display_name": "Track lab", "types": types}, 201, &created)
-	if os.Getenv("TESSERA_LAB_TYPED_FIELDS") == "1" {
-		typed, ok := any(engine).(interface {
-			EnableTypedFields(context.Context, store.Access, string) error
-		})
-		if !ok {
-			t.Fatal("this engine cannot provision typed values")
-		}
-		if err := typed.EnableTypedFields(t.Context(), access, created.DatasetID); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	base := "/v1/datasets/" + created.DatasetID
 	const workout = "com.voptrack.track.workout_session"
 	const custom = "lab.climbing_workout"
 	if _, ok := byID[workout]; !ok {
 		t.Fatal("missing workout")
+	}
+	if os.Getenv("TESSERA_LAB_MANAGED_FIELDS") == "1" {
+		typed, ok := any(engine).(interface {
+			InstallManagedTypes(context.Context, store.Access, string, []string) error
+		})
+		if !ok {
+			t.Fatal("this engine cannot provision managed tables")
+		}
+		if err := typed.InstallManagedTypes(t.Context(), access, created.DatasetID, []string{manifest.RootTypeID, workout}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var tx p.TransactionResult
 	request(http.MethodPost, base+":transact", json.RawMessage(`{"operations":[

@@ -25,7 +25,7 @@ type profileEngine interface {
 	store.Store
 	store.Provisioning
 	EnableReads(...string) error
-	EnableTypedFields(context.Context, store.Access, string) error
+	InstallManagedTypes(context.Context, store.Access, string, []string) error
 	SetAuthorization(context.Context, string, store.Access, store.Authorization) error
 	Close() error
 }
@@ -63,7 +63,7 @@ func TestManagedStorageCompatibilityV1(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, mode := range []string{"json", "typed"} {
+			for _, mode := range []string{"shared", "managed"} {
 				t.Run(mode, func(t *testing.T) {
 					for _, scenario := range []struct {
 						name string
@@ -79,12 +79,7 @@ func TestManagedStorageCompatibilityV1(t *testing.T) {
 							if err != nil {
 								t.Fatal(err)
 							}
-							if mode == "typed" {
-								if err = engine.EnableTypedFields(t.Context(), profileAccess("owner"), made.DatasetID); err != nil {
-									t.Fatal(err)
-								}
-							}
-							scenario.run(t, profileWire{engine, handler, made.DatasetID})
+							scenario.run(t, profileWire{engine: engine, handler: handler, dataset: made.DatasetID, managed: mode == "managed"})
 						})
 					}
 				})
@@ -146,6 +141,7 @@ type profileWire struct {
 	engine  profileEngine
 	handler http.Handler
 	dataset string
+	managed bool
 }
 
 func (f profileWire) call(t *testing.T, method, path, token, body string, status int) []byte {
@@ -162,7 +158,51 @@ func (f profileWire) grant(t *testing.T, token string, grants store.Grants, view
 
 func (f profileWire) transact(t *testing.T, body string) p.TransactionResult {
 	t.Helper()
-	return decode[p.TransactionResult](t, f.call(t, "POST", ":transact", "owner", body, 200))
+	if !f.managed {
+		return decode[p.TransactionResult](t, f.call(t, "POST", ":transact", "owner", body, 200))
+	}
+	// Provision only the managed declarations between schema setup and the
+	// same v1 record operations. Custom descendants retain shared values.
+	input := decode[struct {
+		Operations []json.RawMessage
+	}](t, []byte(body))
+	var ids []string
+	schemaCount := 0
+	for _, raw := range input.Operations {
+		op := decode[struct {
+			Op   string
+			Meta p.Meta
+		}](t, raw)
+		if op.Op != "define_type" {
+			break
+		}
+		schemaCount++
+		if op.Meta.ID != "profile.extension" && op.Meta.ID != "profile.private_note" {
+			ids = append(ids, op.Meta.ID)
+		}
+	}
+	if schemaCount == 0 {
+		return decode[p.TransactionResult](t, f.call(t, "POST", ":transact", "owner", body, 200))
+	}
+	send := func(operations []json.RawMessage) p.TransactionResult {
+		raw, err := json.Marshal(map[string]any{"operations": operations})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decode[p.TransactionResult](t, f.call(t, "POST", ":transact", "owner", string(raw), 200))
+	}
+	initial := send(input.Operations[:schemaCount])
+	if len(ids) != 0 {
+		if err := f.engine.InstallManagedTypes(t.Context(), profileAccess("owner"), f.dataset, ids); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if schemaCount != len(input.Operations) {
+		records := send(input.Operations[schemaCount:])
+		initial.Results = append(initial.Results, records.Results...)
+		initial.Watermark = records.Watermark
+	}
+	return initial
 }
 
 func (f profileWire) refusal(t *testing.T, method, path, token, body string, status int, code string) {
@@ -225,6 +265,12 @@ func checkInheritedSort(t *testing.T, f profileWire) {
 		`{"query":{"type_scope":{"kind":"descendants"},"filter":{"field":{"id":"score","exact":{"type":"integer","value":7}}}},"limit":10}`, 200))
 	if len(filtered.Records) != 0 {
 		t.Fatal("cleared inherited field remained visible to the filter")
+	}
+	yearZero := f.transact(t, `{"operations":[{"op":"insert","type":"profile.base",
+        "fields":{"stamp":{"type":"date_time","value":"0000-01-01T00:00:00.123Z"}}}]}`).Results[0].Objects[0].ID
+	set = decode[p.RecordSet](t, f.call(t, "GET", "/objects/profile.base/"+yearZero+"?fields=stamp", "owner", "", 200))
+	if len(set.Records) != 1 || set.Records[0].Values[0].Payload() != "0000-01-01T00:00:00.123Z" {
+		t.Fatal("date-time changed after storage")
 	}
 }
 

@@ -181,63 +181,63 @@ evaluator for query shapes without an equivalent SQL plan.
   while installed datasets still depend on them. Inventory generated tables for
   backup and restore. Erasure removes every row for the retired dataset across
   all layouts and preserves the existing retirement fence.
-- Introduce the layout for new opted-in installs first. Keep current datasets
-  on their existing path until migration and rollback have been verified.
-  The typed storage benchmark supplies read-cost evidence for the managed
-  layout. The shared values table still needs measurements against legacy JSON
-  for point reads, selective and multi-field filters, writes, and storage.
+- Use shared typed rows as the default for all datasets. Provision managed
+  layouts before inserting records of the selected types. Move older payloads
+  to shared typed rows during the database upgrade.
 
-## Typed-value implementation checkpoint
+## Implementation checkpoint
 
-The SQL engines now provide the host opt-in `EnableTypedFields` for empty
-datasets with a full schema grant. The implementation uses
-`tessera_field_values` and the existing object table for identity. A typed
-object stores no duplicate JSON record payload. The new SQL view assembles
-a transient transport for the evaluator. Catalog publication, generated
-managed-type tables, and the proposed admin methods remain design work.
+SQLite and PostgreSQL use shared typed rows for all unbound fields. A trusted
+Go host can call `InstallManagedTypes` after defining metadata and before
+writing records of those types or their descendants. The call requires full
+schema access. It registers a physical table and indexes for each selected
+type layout. Datasets with matching definitions share the table, with rows
+keyed by dataset and object ID. The cached metadata and read plans resolve
+managed ancestors and shared custom values by layout and schema revision.
 
-Supported integer predicates are pushed down through a shared index, including
-bounded positive conjunctions. Integer and timestamp orderings run in SQL
-before the server assembles the returned records. Other valid predicates and
-orderings can use the existing evaluator. JSON datasets retain their current
-behavior. The v1 data and content API is unchanged.
+The database upgrade transaction converts old payloads and drops the record
+JSON column and layout flag. Restore can read old backups and converts their
+payloads into typed rows. A field explicitly declared as opaque v1 `json`
+still round-trips as an opaque field value. The v1 data and content routes
+are unchanged. Catalog publishing, type sharing, schema upgrades for managed
+layouts, and global type deletion remain proposals.
 
-The same synthetic v1 scenarios run on both layouts and engines. The typed
-path is also covered by wire-value round trips, attachment access and
-retirement, and encrypted backup and restore. The external catalog smoke
-test exercises the existing routes with typed fields enabled.
+Both engines run the same synthetic v1 scenarios on shared and managed
+storage. The compatibility checks also cover inherited fields, attachment
+access, retirement, historic database upgrades, and backup and restore.
 
 ### PostgreSQL measurements
 
-The in-process v1 handler used one synthetic dataset per layout, with
+The in-process v1 handler used one synthetic dataset per layout with
 10,000 records and four fields each. The additional decimal and reference
 fixtures used 1,000 records each. The benchmark used one client and warm
-local PostgreSQL, with 120 measured operations per core case and 30 per
+local PostgreSQL 17, with 120 measured operations per core case and 30 per
 compatibility query. The page case includes start, first page and cleanup.
+The historical JSON baseline uses the same HTTP workload on the preceding
+implementation. Mixed storage manages the root type and uses shared rows
+for the descendant's own fields.
 
-| Operation | JSON p95 | Typed p95 |
-| --- | ---: | ---: |
-| Point read | 3.76 ms | 4.00 ms |
-| Selective integer range | 87.58 ms | 5.03 ms |
-| Two-field integer conjunction | 86.46 ms | 7.34 ms |
-| Patch one field | 10.65 ms | 13.68 ms |
-| Insert four fields | 8.99 ms | 10.35 ms |
-| Inherited timestamp top ten | 21.28 ms | 38.15 ms |
-| Exact grouped decimals | 10.84 ms | 16.17 ms |
-| Reference-filtered page lifecycle | 20.65 ms | 24.92 ms |
-| Scoped integer query | 89.41 ms | 4.42 ms |
+| Operation | Previous JSON p95 | Shared p95 | Managed p95 | Mixed p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Point read | 4.21 ms | 3.68 ms | 3.79 ms | 3.68 ms |
+| Selective integer range | 84.74 ms | 4.41 ms | 4.05 ms | 4.12 ms |
+| Two-field integer conjunction | 87.30 ms | 6.96 ms | 8.18 ms | 4.49 ms |
+| Patch one field | 9.92 ms | 9.62 ms | 9.77 ms | 9.72 ms |
+| Insert four fields | 9.33 ms | 10.31 ms | 10.17 ms | 10.87 ms |
+| Inherited timestamp top ten | 21.08 ms | 36.54 ms | 6.12 ms | 6.44 ms |
+| Exact grouped decimals | 11.57 ms | 15.01 ms | 17.79 ms | 15.62 ms |
+| Reference-filtered page lifecycle | 25.18 ms | 26.57 ms | 27.29 ms | 27.69 ms |
+| Scoped integer query | 87.42 ms | 3.74 ms | 4.00 ms | 3.44 ms |
+| Record and field relations with indexes | 5.47 MiB | 13.12 MiB | 10.17 MiB | 12.24 MiB |
 
-The measured object and field relations, including indexes, used
-5.37 MiB for JSON and 13.22 MiB for typed storage.
-These sizes exclude WAL, metadata, and the additional query fixtures. They
-describe this payload and workload. The benchmark does not establish
-multi-tenant throughput.
+Storage excludes WAL, metadata, and the additional query fixtures. These
+measurements cover the specified payload and warm workload. They do not
+measure concurrent tenant throughput or cold reads.
 
-The initial typed scan regressed on the two-field filter and inherited list.
-Pushdown fixed the two-field scan and SQL ordering reduced the inherited
-list cost by avoiding full record assembly for every candidate. Grouped
-decimals and reference predicates still assemble records for evaluation.
-The extra field rows and indexes account for the measured disk tradeoff.
+The managed timestamp index can order inherited records before joining
+projected fields. Shared-only timestamp ordering still carries the cost of
+looking up each candidate's field value. Exact grouped decimals and reference
+predicates assemble records for evaluation.
 
 Run with a disposable PostgreSQL 17 database using the same DSN convention
 as the integration suite.

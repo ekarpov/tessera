@@ -25,7 +25,7 @@ func TestTypedFieldPerformance(t *testing.T) {
 	}
 	const records = 10000
 	const runs = 120
-	for _, mode := range []string{"json", "typed"} {
+	for _, mode := range []string{"shared", "managed", "mixed"} {
 		t.Run(mode, func(t *testing.T) {
 			engine, admin, schema := openProfilePostgresSchema(t)
 			t.Cleanup(func() { engine.Close() })
@@ -40,12 +40,7 @@ func TestTypedFieldPerformance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "typed" {
-				if err = engine.EnableTypedFields(t.Context(), owner, made.DatasetID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			f := profileWire{engine, handler, made.DatasetID}
+			f := profileWire{engine: engine, handler: handler, dataset: made.DatasetID, managed: mode == "managed"}
 			f.transact(t, `{"operations":[
               {"op":"define_type","meta":{"id":"bench.root","fields":[
                 {"id":"rank","meta_id":"bench.root","type":"integer"},
@@ -54,6 +49,11 @@ func TestTypedFieldPerformance(t *testing.T) {
                 {"id":"bucket","meta_id":"bench.value","type":"integer"},
                 {"id":"label","meta_id":"bench.value","type":"text"}]}}
             ]}`)
+			if mode == "mixed" {
+				if err = engine.InstallManagedTypes(t.Context(), owner, made.DatasetID, []string{"bench.root"}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			label := strings.Repeat("synthetic-", 10)
 			stamp := benchmarkValue(t, p.DateTimeType, "2026-01-01T10:00:00.001Z")
 			text := benchmarkValue(t, p.TextType, label)
@@ -78,13 +78,16 @@ func TestTypedFieldPerformance(t *testing.T) {
 			if _, err = admin.ExecContext(t.Context(), `ANALYZE "`+schema+`"."tessera_objects", "`+schema+`"."tessera_field_values"`); err != nil {
 				t.Fatal(err)
 			}
-			var objectBytes, valueBytes int64
+			var objectBytes, valueBytes, managedBytes int64
 			if err = admin.QueryRowContext(t.Context(), `SELECT
 			  pg_total_relation_size(format('%I.tessera_objects',$1::text)::regclass),
-			  pg_total_relation_size(format('%I.tessera_field_values',$1::text)::regclass)`, schema).Scan(&objectBytes, &valueBytes); err != nil {
+			  pg_total_relation_size(format('%I.tessera_field_values',$1::text)::regclass),
+              (SELECT coalesce(sum(pg_total_relation_size(c.oid)),0) FROM pg_class c
+                JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname=$1 AND c.relkind='r' AND c.relname ~ '^tessera_m_[a-f0-9]{32}$')`, schema).Scan(&objectBytes, &valueBytes, &managedBytes); err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("records=%d record_bytes=%d field_bytes=%d total_bytes=%d", records, objectBytes, valueBytes, objectBytes+valueBytes)
+			t.Logf("records=%d record_bytes=%d field_bytes=%d managed_bytes=%d total_bytes=%d", records, objectBytes, valueBytes, managedBytes, objectBytes+valueBytes+managedBytes)
 			for _, workload := range []timedWorkload{
 				{"point_read", func(i int) {
 					f.call(t, "GET", "/objects/bench.value/"+strconv.Itoa(records-i%runs), "owner", "", 200)
