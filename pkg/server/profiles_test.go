@@ -25,6 +25,7 @@ type profileEngine interface {
 	store.Store
 	store.Provisioning
 	EnableReads(...string) error
+	EnableTypedFields(context.Context, store.Access, string) error
 	SetAuthorization(context.Context, string, store.Access, store.Authorization) error
 	Close() error
 }
@@ -62,28 +63,44 @@ func TestManagedStorageCompatibilityV1(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, scenario := range []struct {
-				name string
-				run  func(*testing.T, profileWire)
-			}{
-				{"inherited_sort", checkInheritedSort},
-				{"exact_aggregate", checkExactAggregate},
-				{"reference_pagination", checkReferencePagination},
-				{"scoped_access", checkScopedAccess},
-			} {
-				t.Run(scenario.name, func(t *testing.T) {
-					made, err := engine.CreateDataset(t.Context(), profileAccess("owner"), scenario.name, p.Limits{}, nil, "", [32]byte{})
-					if err != nil {
-						t.Fatal(err)
+			for _, mode := range []string{"json", "typed"} {
+				t.Run(mode, func(t *testing.T) {
+					for _, scenario := range []struct {
+						name string
+						run  func(*testing.T, profileWire)
+					}{
+						{"inherited_sort", checkInheritedSort},
+						{"exact_aggregate", checkExactAggregate},
+						{"reference_pagination", checkReferencePagination},
+						{"scoped_access", checkScopedAccess},
+					} {
+						t.Run(scenario.name, func(t *testing.T) {
+							made, err := engine.CreateDataset(t.Context(), profileAccess("owner"), scenario.name, p.Limits{}, nil, "", [32]byte{})
+							if err != nil {
+								t.Fatal(err)
+							}
+							if mode == "typed" {
+								if err = engine.EnableTypedFields(t.Context(), profileAccess("owner"), made.DatasetID); err != nil {
+									t.Fatal(err)
+								}
+							}
+							scenario.run(t, profileWire{engine, handler, made.DatasetID})
+						})
 					}
-					scenario.run(t, profileWire{engine, handler, made.DatasetID})
 				})
 			}
+
 		})
 	}
 }
 
 func openProfilePostgres(t *testing.T) profileEngine {
+	t.Helper()
+	engine, _, _ := openProfilePostgresSchema(t)
+	return engine
+}
+
+func openProfilePostgresSchema(t *testing.T) (profileEngine, *sql.DB, string) {
 	t.Helper()
 	dsn := dbtest.Postgres(t)
 	admin, err := sql.Open("tessera-postgres", dsn)
@@ -118,7 +135,7 @@ func openProfilePostgres(t *testing.T) profileEngine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return engine
+	return engine, admin, schema
 }
 
 func profileAccess(token string) store.Access {
@@ -193,6 +210,21 @@ func checkInheritedSort(t *testing.T, f profileWire) {
 	set := decode[p.RecordSet](t, f.call(t, "GET", "/objects/profile.extension/"+extensionRecord+"?fields=label", "owner", "", 200))
 	if len(set.Records) != 1 || set.Records[0].Values[0].Payload() != "extension value" {
 		t.Fatal("custom field did not survive inherited record read")
+	}
+	filtered := decode[p.RecordSet](t, f.call(t, "POST", "/objects/profile.base:query", "owner",
+		`{"query":{"type_scope":{"kind":"descendants"},"filter":{"and":[
+          {"field":{"id":"score","range":{"lower":{"type":"integer","value":6}}}},
+          {"field":{"id":"score","exact":{"type":"integer","value":7}}}
+        ]}},"limit":10}`, 200))
+	if len(filtered.Records) != 1 || filtered.Records[0].ID.ID != extensionRecord {
+		t.Fatal("filter lost a matching descendant or included a missing value")
+	}
+	f.call(t, "PATCH", "/objects/profile.extension/"+extensionRecord, "owner",
+		`{"fields":{"score":{"type":"null"}}}`, 200)
+	filtered = decode[p.RecordSet](t, f.call(t, "POST", "/objects/profile.base:query", "owner",
+		`{"query":{"type_scope":{"kind":"descendants"},"filter":{"field":{"id":"score","exact":{"type":"integer","value":7}}}},"limit":10}`, 200))
+	if len(filtered.Records) != 0 {
+		t.Fatal("cleared inherited field remained visible to the filter")
 	}
 }
 

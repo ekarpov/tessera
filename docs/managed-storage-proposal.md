@@ -187,6 +187,65 @@ evaluator for query shapes without an equivalent SQL plan.
   layout. The shared values table still needs measurements against legacy JSON
   for point reads, selective and multi-field filters, writes, and storage.
 
+## Typed-value implementation checkpoint
+
+The SQL engines now provide the host opt-in `EnableTypedFields` for empty
+datasets with a full schema grant. The implementation uses
+`tessera_field_values` and the existing object table for identity. A typed
+object stores no duplicate JSON record payload. The new SQL view assembles
+a transient transport for the evaluator. Catalog publication, generated
+managed-type tables, and the proposed admin methods remain design work.
+
+Supported integer predicates are pushed down through a shared index, including
+bounded positive conjunctions. Integer and timestamp orderings run in SQL
+before the server assembles the returned records. Other valid predicates and
+orderings can use the existing evaluator. JSON datasets retain their current
+behavior. The v1 data and content API is unchanged.
+
+The same synthetic v1 scenarios run on both layouts and engines. The typed
+path is also covered by wire-value round trips, attachment access and
+retirement, and encrypted backup and restore. The external catalog smoke
+test exercises the existing routes with typed fields enabled.
+
+### PostgreSQL measurements
+
+The in-process v1 handler used one synthetic dataset per layout, with
+10,000 records and four fields each. The additional decimal and reference
+fixtures used 1,000 records each. The benchmark used one client and warm
+local PostgreSQL, with 120 measured operations per core case and 30 per
+compatibility query. The page case includes start, first page and cleanup.
+
+| Operation | JSON p95 | Typed p95 |
+| --- | ---: | ---: |
+| Point read | 3.76 ms | 4.00 ms |
+| Selective integer range | 87.58 ms | 5.03 ms |
+| Two-field integer conjunction | 86.46 ms | 7.34 ms |
+| Patch one field | 10.65 ms | 13.68 ms |
+| Insert four fields | 8.99 ms | 10.35 ms |
+| Inherited timestamp top ten | 21.28 ms | 38.15 ms |
+| Exact grouped decimals | 10.84 ms | 16.17 ms |
+| Reference-filtered page lifecycle | 20.65 ms | 24.92 ms |
+| Scoped integer query | 89.41 ms | 4.42 ms |
+
+The measured object and field relations, including indexes, used
+5.37 MiB for JSON and 13.22 MiB for typed storage.
+These sizes exclude WAL, metadata, and the additional query fixtures. They
+describe this payload and workload. The benchmark does not establish
+multi-tenant throughput.
+
+The initial typed scan regressed on the two-field filter and inherited list.
+Pushdown fixed the two-field scan and SQL ordering reduced the inherited
+list cost by avoiding full record assembly for every candidate. Grouped
+decimals and reference predicates still assemble records for evaluation.
+The extra field rows and indexes account for the measured disk tradeoff.
+
+Run with a disposable PostgreSQL 17 database using the same DSN convention
+as the integration suite.
+
+```sh
+TESSERA_MEASURE_TYPED_FIELDS=1 go test ./pkg/server -run '^TestTypedFieldPerformance$' -count=1 -v
+```
+
 ## Decisions for review
 
 1. Confirm one shared physical layout per managed type revision family, with
