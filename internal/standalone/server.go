@@ -47,6 +47,9 @@ type Config struct {
 	// nothing in the protocol bounds how much, so quota and rate limiting are
 	// the deployment's to answer before it is turned on.
 	DatasetCreation bool `json:"dataset_creation"`
+	// ManagedTypesFile is an operator-approved list of declared v1 types.
+	// Matching definitions use managed tables when a dataset is created.
+	ManagedTypesFile string `json:"managed_types_file,omitempty"`
 	// OptionalReads names the optional read capabilities this deployment
 	// advertises. Configuration may withhold an optional feature; it can never
 	// disable a required operation, and an unknown name is refused at startup
@@ -195,6 +198,21 @@ func Open(ctx context.Context, config Config) (result *Runtime, err error) {
 	if err != nil {
 		return nil, err
 	}
+	var managedTypes []p.Meta
+	if config.ManagedTypesFile != "" {
+		const maxManagedTypesBytes = 1 << 20
+		raw, err := readPrivateFile(config.ManagedTypesFile, maxManagedTypesBytes)
+		if err != nil {
+			return nil, fmt.Errorf("managed_types_file: %w", err)
+		}
+		var file struct {
+			Types []p.Meta `json:"types"`
+		}
+		if err = p.DecodeRequest(raw, &file, maxManagedTypesBytes); err != nil || len(file.Types) == 0 {
+			return nil, errors.New("managed_types_file must contain a non-empty types array")
+		}
+		managedTypes = file.Types
+	}
 	var engine *sqlite.Store
 	if config.Engine == "postgres" {
 		dsn, e := PrivateFile(config.PostgresDSNFile)
@@ -213,6 +231,11 @@ func Open(ctx context.Context, config Config) (result *Runtime, err error) {
 			engine.Close()
 		}
 	}()
+	if len(managedTypes) > 0 {
+		if err = engine.ConfigureManagedTypes(ctx, managedTypes); err != nil {
+			return nil, errors.New("cannot configure approved managed type layouts")
+		}
+	}
 	if err = engine.RegisterHostRegistry(ctx); err != nil {
 		return nil, err
 	}
@@ -412,6 +435,10 @@ func Open(ctx context.Context, config Config) (result *Runtime, err error) {
 // protocol error: this is the operator's own console at startup, they wrote
 // the path, and the contents are never quoted.
 func PrivateFile(path string) ([]byte, error) {
+	return readPrivateFile(path, 64<<10)
+}
+
+func readPrivateFile(path string, maxBytes int64) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("a credential file is required and none was configured")
 	}
@@ -425,7 +452,7 @@ func PrivateFile(path string) ([]byte, error) {
 	if info.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("credential file %s is mode %04o and must be 0600: other accounts on this host can read it", path, info.Mode().Perm())
 	}
-	if info.Size() > 64<<10 {
+	if info.Size() > maxBytes {
 		return nil, fmt.Errorf("credential file %s is too large", path)
 	}
 	raw, err := os.ReadFile(path)

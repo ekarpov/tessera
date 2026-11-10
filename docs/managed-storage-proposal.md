@@ -187,8 +187,11 @@ evaluator for query shapes without an equivalent SQL plan.
 
 ## Implementation checkpoint
 
-SQLite and PostgreSQL use shared typed rows for all unbound fields. A trusted
-Go host can call `InstallManagedTypes` after defining metadata and before
+SQLite and PostgreSQL use shared typed rows for all unbound fields. The
+reference server can pre-register layouts from an operator-approved
+[managed types file](self-hosting.md#managed-record-storage). Matching
+definitions are bound in the dataset creation transaction. A trusted
+Go host can also call `InstallManagedTypes` after defining metadata and before
 writing records of those types or their descendants. The call requires full
 schema access. It registers a physical table and indexes for each selected
 type layout. Datasets with matching definitions share the table, with rows

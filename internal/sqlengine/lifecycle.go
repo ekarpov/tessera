@@ -434,25 +434,13 @@ func (s *Store) CreateDataset(ctx context.Context, a store.Access, displayName s
 	// And before the key is claimed: an invalid schema is a malformed request,
 	// and a malformed request must not spend a key, which is the rule for every
 	// other operation's grammar.
-	typed := image
-	if len(types) > 0 {
-		installer := store.Access{Principal: "creation", Authorization: "creation"}
-		if err = fresh.SetAuthorization(ctx, image.ID, installer, store.Authorization{Grants: store.Grants{Schema: true}, View: store.FullView()}); err != nil {
-			return store.Created{}, err
-		}
-		if err = fresh.Transact(ctx, installer, image.ID, func(tx store.Tx) error {
-			for _, meta := range types {
-				if _, e := tx.CreateMetadata(meta); e != nil {
-					return e
-				}
-			}
-			return nil
-		}); err != nil {
-			return store.Created{}, err
-		}
-		if typed, err = fresh.Image(ctx); err != nil {
-			return store.Created{}, err
-		}
+	typed, err := defineCreationTypes(ctx, fresh, image, types)
+	if err != nil {
+		return store.Created{}, err
+	}
+	layouts, err := s.approvedManagedLayouts(typed.Types)
+	if err != nil {
+		return store.Created{}, err
 	}
 	bounds, err := json.Marshal(limits)
 	if err != nil {
@@ -515,6 +503,9 @@ func (s *Store) CreateDataset(ctx context.Context, a store.Access, displayName s
 			return store.Created{}, err
 		}
 	}
+	if err = bindManagedLayouts(ctx, tx, image.ID, layouts); err != nil {
+		return store.Created{}, err
+	}
 	// A dataset created into a storage that already serves content gets a store
 	// of its own, never a share of another dataset's.
 	if s.contentDir != "" {
@@ -539,6 +530,31 @@ func (s *Store) CreateDataset(ctx context.Context, a store.Access, displayName s
 	// create: the bound catches up at the next change or restart.
 	_ = s.refreshBounds(ctx)
 	return store.Created{DatasetID: image.ID}, nil
+}
+
+func defineCreationTypes(ctx context.Context, fresh *recordstate.Store, image recordstate.Image, types []p.Meta) (recordstate.Image, error) {
+	var err error
+	typed := image
+	if len(types) > 0 {
+		installer := store.Access{Principal: "creation", Authorization: "creation"}
+		if err = fresh.SetAuthorization(ctx, image.ID, installer, store.Authorization{Grants: store.Grants{Schema: true}, View: store.FullView()}); err != nil {
+			return recordstate.Image{}, err
+		}
+		if err = fresh.Transact(ctx, installer, image.ID, func(tx store.Tx) error {
+			for _, meta := range types {
+				if _, e := tx.CreateMetadata(meta); e != nil {
+					return e
+				}
+			}
+			return nil
+		}); err != nil {
+			return recordstate.Image{}, err
+		}
+		if typed, err = fresh.Image(ctx); err != nil {
+			return recordstate.Image{}, err
+		}
+	}
+	return typed, nil
 }
 
 // Provisioned names every dataset in this storage, for composition only.

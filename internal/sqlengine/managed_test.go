@@ -70,3 +70,30 @@ func TestManagedLayoutSharesTablesAndStoresNewDescendants(t *testing.T) {
 		t.Fatal("legacy record payload column survived migration")
 	}
 }
+
+func TestManagedBindingFailureRollsBackDatasetCreation(t *testing.T) {
+	s, _, _ := fixture(t)
+	ctx := t.Context()
+	types := []p.Meta{{ID: "test.managed"}}
+	if err := s.ConfigureManagedTypes(ctx, types); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Provisioned(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `CREATE TRIGGER "refuse_install" BEFORE INSERT ON "tessera_managed_installations" BEGIN SELECT RAISE(ABORT, 'test refusal'); END`); err != nil {
+		t.Fatal(err)
+	}
+	const key = "7ec11017-5c5f-4550-866a-5ee11d1c6bcc"
+	for range 2 {
+		made, err := s.CreateDataset(ctx, owner, "Synthetic", p.Limits{}, types, key, [32]byte{})
+		if err == nil || made.DatasetID != "" {
+			t.Fatal("failed managed binding returned a dataset")
+		}
+	}
+	after, err := s.Provisioned(ctx)
+	if err != nil || len(after) != len(before) {
+		t.Fatal("managed binding failure left a partially created dataset", err)
+	}
+}

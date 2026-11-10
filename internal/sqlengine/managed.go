@@ -94,10 +94,8 @@ func (s *Store) InstallManagedTypes(ctx context.Context, a store.Access, dataset
 		return dbError(ctx, err)
 	}
 	defer tx.Rollback()
-	if s.postgres {
-		if _, err = tx.ExecContext(ctx, `LOCK TABLE "tessera_managed_layouts" IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-			return dbError(ctx, err)
-		}
+	if err = s.lockManagedLayouts(ctx, tx); err != nil {
+		return err
 	}
 	if err = s.serializeWrites(ctx, tx, dataset); err != nil {
 		return err
@@ -109,12 +107,13 @@ func (s *Store) InstallManagedTypes(ctx context.Context, a store.Access, dataset
 	if !h.auth.Grants.Schema || !h.auth.View.Full() {
 		return store.Refuse("permission_denied")
 	}
-	var total int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_managed_layouts"`).Scan(&total); err != nil {
-		return dbError(ctx, err)
-	}
-	created := false
+	var layouts []installedLayout
+	seen := make(map[string]bool, len(typeIDs))
 	for _, id := range typeIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		meta, ok := h.image.Types[id]
 		if !ok {
 			return store.Refuse("meta_type_not_found")
@@ -139,46 +138,89 @@ func (s *Store) InstallManagedTypes(ctx context.Context, a store.Access, dataset
 				return store.Refuse("conflict")
 			}
 		}
-		layout := managedLayout{TypeID: id, Fields: make([]managedField, 0, len(meta.Fields))}
-		for _, field := range meta.Fields {
-			layout.Fields = append(layout.Fields, managedField{field.ID, field.Type})
-		}
-		sort.Slice(layout.Fields, func(i, j int) bool { return layout.Fields[i].ID < layout.Fields[j].ID })
-		key, body, err := layout.identity()
+		layout, err := declaredManagedLayout(meta)
 		if err != nil {
 			return err
 		}
-		var present bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM "tessera_managed_layouts" WHERE "layout_id"=$1)`, key).Scan(&present); err != nil {
-			return dbError(ctx, err)
-		}
-		if !present {
-			if total >= maxManagedLayouts {
-				return store.Refuse("query_result_limit_exceeded")
-			}
-			if err = s.createManagedTable(ctx, tx, installedLayout{key, layout}); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_managed_layouts" VALUES ($1,$2)`, key, body); err != nil {
-				return dbError(ctx, err)
-			}
-			total++
-			created = true
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_managed_installations" VALUES ($1,$2,$3)`, dataset, id, key); err != nil {
-			return dbError(ctx, err)
-		}
+		layouts = append(layouts, layout)
 	}
-	if err = updateManagedKey(ctx, tx, dataset); err != nil {
+	if err = s.registerManagedLayouts(ctx, tx, layouts); err != nil {
 		return err
 	}
-	if created {
-		if err = s.refreshManagedViews(ctx, tx); err != nil {
-			return err
-		}
+	if err = bindManagedLayouts(ctx, tx, dataset, layouts); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return dbError(ctx, err)
+	}
+	return nil
+}
+
+func declaredManagedLayout(meta p.Meta) (installedLayout, error) {
+	layout := managedLayout{TypeID: meta.ID, Fields: make([]managedField, 0, len(meta.Fields))}
+	for _, field := range meta.Fields {
+		layout.Fields = append(layout.Fields, managedField{field.ID, field.Type})
+	}
+	sort.Slice(layout.Fields, func(i, j int) bool { return layout.Fields[i].ID < layout.Fields[j].ID })
+	key, _, err := layout.identity()
+	return installedLayout{key, layout}, err
+}
+
+func (s *Store) lockManagedLayouts(ctx context.Context, tx *sql.Tx) error {
+	if s.postgres {
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE "tessera_managed_layouts" IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return dbError(ctx, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) registerManagedLayouts(ctx context.Context, tx *sql.Tx, layouts []installedLayout) error {
+	if len(layouts) == 0 {
+		return nil
+	}
+	var total int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_managed_layouts"`).Scan(&total); err != nil {
+		return dbError(ctx, err)
+	}
+	before := total
+	for _, layout := range layouts {
+		var present bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM "tessera_managed_layouts" WHERE "layout_id"=$1)`, layout.id).Scan(&present); err != nil {
+			return dbError(ctx, err)
+		}
+		if present {
+			continue
+		}
+		if total >= maxManagedLayouts {
+			return store.Refuse("query_result_limit_exceeded")
+		}
+		_, body, err := layout.identity()
+		if err != nil {
+			return err
+		}
+		if err = s.createManagedTable(ctx, tx, layout); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_managed_layouts" VALUES ($1,$2)`, layout.id, body); err != nil {
+			return dbError(ctx, err)
+		}
+		total++
+	}
+	if total != before {
+		return s.refreshManagedViews(ctx, tx)
+	}
+	return nil
+}
+
+func bindManagedLayouts(ctx context.Context, tx *sql.Tx, dataset string, layouts []installedLayout) error {
+	for _, layout := range layouts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO "tessera_managed_installations" VALUES ($1,$2,$3)`, dataset, layout.TypeID, layout.id); err != nil {
+			return dbError(ctx, err)
+		}
+	}
+	if len(layouts) != 0 {
+		return updateManagedKey(ctx, tx, dataset)
 	}
 	return nil
 }

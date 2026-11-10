@@ -120,6 +120,35 @@ and token values have no field to travel in, and only counts and existence are r
 read the dataset through a handle carrying read only, so administration cannot write, change schema
 or erase, and no record value appears on any page. Provisioning remains local.
 
+## Managed record storage
+
+Set `"managed_types_file": "/etc/tessera/managed-types.json"` in the server
+configuration to approve types for managed storage. The file must be private
+(mode 0600) and at most 1 MiB. Use a non-empty `types` array of declared v1
+metadata, with every parent listed before its children.
+
+```json
+{
+  "types": [
+    {
+      "id": "example.measurement",
+      "fields": [
+        {"id": "stamp", "meta_id": "example.measurement", "type": "date_time"}
+      ]
+    }
+  ]
+}
+```
+
+Tessera validates the file and prepares the shared physical tables at
+startup. When creating a dataset, it binds matching definitions and their
+approved ancestors in the same database transaction as the dataset and its
+creation receipt. Matching uses the full declared definitions, including
+field order. The file selects storage for types supplied at creation through
+v1 or an invitation template. It does not add types to a dataset. Unmatched
+types, and fields declared on custom descendants, use shared typed rows.
+Existing datasets retain their bindings across config changes and restores.
+
 ## Identity page branding
 
 An optional operator-owned `identity_brand` in the server JSON configuration

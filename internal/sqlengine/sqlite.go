@@ -39,6 +39,7 @@ type Store struct {
 	// answered in SQL order, so a test can tell it was not the fallback.
 	sortHook     func()
 	managed      managedCache
+	managedTypes map[string]approvedManagedType
 	schemas      schemaCache
 	db, reader   *sql.DB
 	lock         *os.File
