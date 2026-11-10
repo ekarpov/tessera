@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ekarpov/tessera/internal/recordstate"
 	p "github.com/ekarpov/tessera/pkg/protocol"
 	"github.com/ekarpov/tessera/pkg/store"
 )
@@ -241,12 +242,22 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 	manifest := backupManifest{Limits: s.bounds(), Capture: capture}
 	total := 0
 	for _, name := range backupTables {
-		source := name
-		if name == "tessera_field_values" {
-			// Managed columns are flattened in the encrypted archive.
-			source = "tessera_all_field_values"
+		query := `SELECT * FROM "` + name + `"`
+		switch name {
+		case "tessera_objects":
+			// Pack one portable payload per object, as the legacy archive did.
+			// Charging a full archive row for every field exhausted the memory
+			// budget much earlier even for data the previous release could back up.
+			query = `SELECT "dataset_id","object_id","type_id","fields" FROM "tessera_read_objects"`
+			if s.postgres {
+				query = `SELECT "object_id","type_id","dataset_id","fields" FROM "tessera_read_objects"`
+			}
+		case "tessera_field_values":
+			// Retain the archive table inventory. All values now travel with the
+			// object payload, including the managed columns.
+			query += " LIMIT 0"
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT * FROM "`+source+`"`)
+		rows, e := tx.QueryContext(ctx, query)
 		if e != nil {
 			return dbError(ctx, e)
 		}
@@ -264,6 +275,18 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			}
 			if e = rows.Scan(targets...); e != nil {
 				break
+			}
+			if name == "tessera_objects" {
+				raw, ok := values[3].([]byte)
+				var record recordstate.Row
+				if !ok || decodeStoredFields(raw, &record) != nil {
+					e = store.Refuse("internal_error")
+					break
+				}
+				values[3], e = p.MarshalWire(record.Fields)
+				if e != nil {
+					break
+				}
 			}
 			row := make([]backupValue, len(values))
 			for i, value := range values {

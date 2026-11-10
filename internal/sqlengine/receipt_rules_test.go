@@ -100,21 +100,28 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 	}
 	older := filepath.Join(t.TempDir(), "legacy.enc")
 	rewriteArchive(t, archive, older, backupKey, func(m *backupManifest) {
+		for _, table := range m.Tables {
+			switch table.Name {
+			case "tessera_objects":
+				if len(table.Columns) != 4 || table.Columns[3] != "fields" || len(table.Rows) != 1 {
+					t.Fatal("backup must pack the record fields into a single archive row")
+				}
+				row := table.Rows[0]
+				if !bytes.Equal(row[3].Bytes, payloads[dataset][*row[1].Text]) {
+					t.Fatal("backup payload did not preserve the record fields")
+				}
+			case "tessera_field_values":
+				if len(table.Rows) != 0 {
+					t.Fatal("backup repeated fields as expanded SQL rows")
+				}
+			}
+		}
 		m.Tables = m.Tables[:len(m.Tables)-3]
 		for i := range m.Tables {
 			table := &m.Tables[i]
 			switch table.Name {
 			case "tessera_dataset":
 				stripBackupColumn(table, "managed_key")
-			case "tessera_objects":
-				for j, col := range table.Columns {
-					if col == "wire_bytes" {
-						table.Columns[j] = "fields"
-						for n, row := range table.Rows {
-							table.Rows[n][j] = backupValue{Kind: "bytes", Bytes: payloads[*row[0].Text][*row[1].Text]}
-						}
-					}
-				}
 			case "tessera_receipts":
 				for _, name := range []string{"retain_until", "executor_id", "watermark", "replay_scope"} {
 					stripBackupColumn(table, name)
