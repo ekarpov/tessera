@@ -1036,6 +1036,10 @@ recovers the deployment without a restore. That refusal is deliberate and tested
 schema the binary does not understand fails silently, while refusing does not. Plan a rollback as
 "restore the backup taken before the upgrade", never as "start the old binary".
 
+Stop all previous-version writers before migrating. A writer already connected to PostgreSQL
+can continue using the old schema rules until it stops. In particular, creator attribution depends
+on every writer enforcing creator fields.
+
 Stop the server before provisioning, backup, restore or reset commands; they take the same database.
 A migration that fails leaves the transaction rolled back and the server refusing to start, which is
 the same situation as a rollback: restore, or fix forward.

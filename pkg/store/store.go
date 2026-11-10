@@ -15,6 +15,8 @@ import (
 
 // Access identifies both the principal and its particular application grant.
 // It is supplied by trusted authentication code, never decoded from a request.
+// Principal stays stable across authorizations and cannot be reassigned to
+// another identity, including after an account is deleted.
 type Access struct{ Principal, Authorization string }
 
 func (a Access) Valid() bool { return a.Principal != "" && a.Authorization != "" }

@@ -1123,12 +1123,16 @@ A dataset advertising `creator_attribution` accepts `"creator": true` on a decla
 False and absence are equivalent and the server returns only true. The property is inherited.
 A non-text creator field is refused with `400 meta_invalid_field`. A dataset offering the capability
 MUST admit text values of at least 32 bytes. Clients check the capability before sending the member.
+If provisioning gives the client no capability information for the new dataset, it can declare
+creator fields after discovering the dataset's capabilities.
 A server that knows the member but withholds the capability refuses the declaration with
 `403 not_supported`.
 
 On every insert, the server fills each effective creator field with the same opaque, 32-character
 lowercase hexadecimal identifier. The identifier is stable for the authenticated principal in
-that dataset, including across application authorizations and server restarts. Distinct principals
+that dataset, including across application authorizations, server restarts and restores that retain
+the dataset identity. Deployments MUST keep authenticated principal identities stable and MUST NOT
+reassign one principal's identity to another. Distinct principals
 in a dataset receive distinct identifiers with cryptographically negligible collision probability.
 Identifiers are unlinkable by value across datasets and MUST NOT encode a public account identifier
 or credential. An installation can use a dataset-keyed cryptographic derivation with a separate

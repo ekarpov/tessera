@@ -60,6 +60,7 @@ type Store struct {
 	scanFrom       func(typeIDs []string, after string, visit func(id string, row Row) (bool, error)) error
 	state          state
 	secret         [32]byte
+	creatorSecret  [32]byte
 	mediaAuthority func(string) error
 	// sourcedWrites lets a write evaluate against records fetched one at a
 	// time through source rather than against the whole dataset. What it
@@ -163,6 +164,7 @@ func New(limits p.Limits) (*Store, error) {
 	if _, err := rand.Read(s.secret[:]); err != nil {
 		return nil, err
 	}
+	s.creatorSecret = s.secret
 	return s, nil
 }
 
@@ -284,7 +286,7 @@ func (s *Store) Info(ctx context.Context, a store.Access, dataset string) (store
 	if s.limits.MaxTextBytes >= p.CreatorIDBytes {
 		capabilities = append(capabilities, p.CreatorAttributionCapability)
 	}
-	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: capabilities, Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest("view", viewBytes(g.View)), SchemaVersion: s.digest("schema", raw)}, nil
+	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: capabilities, Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest(&s.secret, "view", viewBytes(g.View)), SchemaVersion: s.digest(&s.secret, "schema", raw)}, nil
 }
 
 // ReadSchema evaluates a request that reads the schema and no records. This
@@ -736,7 +738,7 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 			if creator.Type() == p.NullType {
 				// Bind to the dataset and principal, never the installation or
 				// a caller-supplied identity. Keep the principal off the wire.
-				digest := t.engine.digest("record_creator", []byte(t.principal))
+				digest := t.engine.digest(&t.engine.creatorSecret, "record_creator", []byte(t.principal))
 				creator, err = p.NewValue(p.TextType, digest[2:2+p.CreatorIDBytes])
 				if err != nil {
 					return nil, nil, err
@@ -1374,8 +1376,8 @@ func (t *transaction) ValidateFields(typeID string, fields map[string]p.Value) e
 	return err
 }
 
-func (s *Store) digest(purpose string, raw []byte) string {
-	h := hmac.New(sha256.New, s.secret[:])
+func (s *Store) digest(key *[32]byte, purpose string, raw []byte) string {
+	h := hmac.New(sha256.New, key[:])
 	h.Write([]byte(purpose))
 	h.Write([]byte{0})
 	h.Write([]byte(s.id))
@@ -1393,7 +1395,7 @@ func (t *transaction) effective(id string) (p.Meta, error) {
 	if err != nil {
 		return m, err
 	}
-	m.SchemaVersion = t.engine.digest("type", raw)
+	m.SchemaVersion = t.engine.digest(&t.engine.secret, "type", raw)
 	return m, nil
 }
 func (t *transaction) ExpectType(id, version string) (err error) {

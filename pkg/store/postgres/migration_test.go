@@ -52,6 +52,7 @@ var singletonSchema = []string{
 	`ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,
 	`DROP TABLE "tessera_page_rows"`,
 	`ALTER TABLE "tessera_pages" DROP COLUMN "position"`,
+	`ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`,
 	`UPDATE "tessera_migration" SET "version"=4`,
 }
 

@@ -187,7 +187,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version > 15 {
+	} else if version > 16 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version < 2 {
@@ -257,6 +257,11 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 	}
 	if version < 15 {
 		if _, err = tx.ExecContext(ctx, migrations.SQLiteV15); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version < 16 {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteV16); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}

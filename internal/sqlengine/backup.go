@@ -618,7 +618,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	}
 	// A restored copy is a distinct storage and every dataset in it gets its own
 	// fresh version secret: sharing one across the copy would let a watermark
-	// minted in the original be accepted here.
+	// minted in the original be accepted here. Creator identifiers belong to
+	// the logical dataset and remain stable when its records are restored.
 	// A dataset or content store erased since this backup was taken is
 	// erased again here, in the same transaction that loads it, so what was
 	// erased is never committed and never served. Refusing the whole backup
@@ -683,7 +684,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		if e != nil {
 			return e
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "secret"=$1,"watermark"=$2 WHERE "dataset_id"=$3`, secret[:], "w:"+watermark, id); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "creator_secret"=coalesce("creator_secret","secret"),"secret"=$1,"watermark"=$2 WHERE "dataset_id"=$3`, secret[:], "w:"+watermark, id); err != nil {
 			return dbError(ctx, err)
 		}
 	}
@@ -907,12 +908,14 @@ func recount(ctx context.Context, tx *sql.Tx) error {
 
 // archiveColumnFills gives the value of a column a later migration appended,
 // for a row from an archive made before it. The dataset's counts are filled
-// with zero and then worked out from the records; an aborted import from
-// then is taken as not yet cleaned, so the next pass removes its bytes.
+// with zero and then worked out from the records. The creator key starts
+// null so restore can preserve the original secret before rotating it.
+// An aborted import is taken as not yet cleaned.
 var archiveColumnFills = map[string]map[string]func() backupValue{
 	"tessera_dataset": {
-		"object_count": zeroValue,
-		"object_bytes": zeroValue,
+		"object_count":   zeroValue,
+		"object_bytes":   zeroValue,
+		"creator_secret": func() backupValue { return backupValue{Kind: "null"} },
 	},
 	"tessera_imports": {
 		"cleaned": zeroValue,

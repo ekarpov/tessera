@@ -171,7 +171,7 @@ func (s *Store) eraseWithin(ctx context.Context, tx *sql.Tx, a store.Access, dat
 		}
 	}
 	// The rename is last: everything above resolves against the erased identity.
-	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "dataset_id"=$1,"secret"=$2,"next_id"=$3,"watermark"=$4,"replaced_dataset_id"=$5,"object_count"=0,"object_bytes"=0 WHERE "dataset_id"=$6`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, dataset, dataset); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "dataset_id"=$1,"secret"=$2,"creator_secret"=NULL,"next_id"=$3,"watermark"=$4,"replaced_dataset_id"=$5,"object_count"=0,"object_bytes"=0 WHERE "dataset_id"=$6`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, dataset, dataset); err != nil {
 		return result, dbError(ctx, err)
 	}
 	return store.EraseResult{DatasetID: image.ID, Watermark: image.Watermark}, nil

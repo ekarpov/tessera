@@ -40,9 +40,9 @@ type held struct {
 func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset string, objects bool) (held, error) {
 	h := held{image: recordstate.Image{Types: map[string]p.Meta{}, Objects: map[string]recordstate.Row{}}}
 	image := &h.image
-	var secret, bounds []byte
+	var secret, creatorSecret, bounds []byte
 	var next string
-	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds)
+	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret",coalesce("creator_secret","secret"),"next_id","watermark","limits" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &creatorSecret, &next, &image.Watermark, &bounds)
 	if err == sql.ErrNoRows {
 		// not_found means proven retirement and nothing else. Without evidence
 		// in the retirement ledger this identity may name a dataset that never
@@ -76,10 +76,11 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		return h, store.Refuse("internal_error")
 	}
 	image.Next, err = strconv.ParseUint(next, 10, 64)
-	if err != nil || len(secret) != 32 {
+	if err != nil || len(secret) != 32 || len(creatorSecret) != 32 {
 		return h, store.Refuse("internal_error")
 	}
 	copy(image.Secret[:], secret)
+	copy(image.CreatorSecret[:], creatorSecret)
 	var size int64
 	if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(length("body")),0) FROM "tessera_types" WHERE "dataset_id"=$1`, dataset).Scan(&size); err != nil {
 		return h, dbError(ctx, err)
