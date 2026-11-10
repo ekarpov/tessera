@@ -20,6 +20,8 @@ import (
 // to go, or reopening re-adds one that already exists. The names are the ones
 // the forward migration drops by name, so they have to be restored exactly.
 var singletonSchema = []string{
+	`DROP TRIGGER "tessera_schema_cache_changed" ON "tessera_types"`,
+	`DROP FUNCTION "tessera_invalidate_schema_cache"()`,
 	`ALTER TABLE "tessera_objects" DROP CONSTRAINT "tessera_objects_pkey"`,
 	`ALTER TABLE "tessera_objects" ADD PRIMARY KEY ("object_id")`,
 	`DROP INDEX "tessera_objects_type"`,
@@ -47,6 +49,7 @@ var singletonSchema = []string{
 	`ALTER TABLE "tessera_receipts" DROP COLUMN "executor_id"`,
 	`ALTER TABLE "tessera_dataset" DROP COLUMN "object_count"`,
 	`ALTER TABLE "tessera_dataset" DROP COLUMN "object_bytes"`,
+	`ALTER TABLE "tessera_dataset" DROP COLUMN "schema_cache_key"`,
 	`ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`,
 	`DROP INDEX "tessera_imports_uncleaned"`,
 	`ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,

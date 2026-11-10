@@ -42,7 +42,8 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	image := &h.image
 	var secret, bounds []byte
 	var next string
-	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds)
+	var schemaKey sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits","schema_cache_key" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds, &schemaKey)
 	if err == sql.ErrNoRows {
 		// not_found means proven retirement and nothing else. Without evidence
 		// in the retirement ledger this identity may name a dataset that never
@@ -80,10 +81,14 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		return h, store.Refuse("internal_error")
 	}
 	copy(image.Secret[:], secret)
-	var size int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(length("body")),0) FROM "tessera_types" WHERE "dataset_id"=$1`, dataset).Scan(&size); err != nil {
-		return h, dbError(ctx, err)
+	cached, hit := s.schemas.get(schemaKey.String)
+	size := cached.bytes
+	if !hit {
+		if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(length("body")),0) FROM "tessera_types" WHERE "dataset_id"=$1`, dataset).Scan(&size); err != nil {
+			return h, dbError(ctx, err)
+		}
 	}
+	schemaBytes := size
 	if objects {
 		var count, objectBytes int64
 		if err = tx.QueryRowContext(ctx, `SELECT "object_count","object_bytes" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&count, &objectBytes); err != nil {
@@ -101,33 +106,38 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		return h, store.RefuseWith("query_result_limit_exceeded", "materialization_limit",
 			map[string]any{"maximum": h.limits.MaxMaterializedBytes})
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT "type_id","body" FROM "tessera_types" WHERE "dataset_id"=$1`, dataset)
-	if err != nil {
-		return h, dbError(ctx, err)
-	}
-	for rows.Next() {
-		var id string
-		var raw []byte
-		if err = rows.Scan(&id, &raw); err != nil {
-			break
+	if hit {
+		image.Types = cached.types
+	} else {
+		rows, err := tx.QueryContext(ctx, `SELECT "type_id","body" FROM "tessera_types" WHERE "dataset_id"=$1`, dataset)
+		if err != nil {
+			return h, dbError(ctx, err)
 		}
-		var m p.Meta
-		if err = json.Unmarshal(raw, &m); err != nil {
-			break
+		for rows.Next() {
+			var id string
+			var raw []byte
+			if err = rows.Scan(&id, &raw); err != nil {
+				break
+			}
+			var m p.Meta
+			if err = json.Unmarshal(raw, &m); err != nil {
+				break
+			}
+			image.Types[id] = m
 		}
-		image.Types[id] = m
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
-		return h, dbError(ctx, err)
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return h, dbError(ctx, err)
+		}
+		s.schemas.put(schemaKey.String, cachedSchema{types: image.Types, bytes: schemaBytes})
 	}
 	if !objects {
 		return h, nil
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1`, dataset)
+	rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1`, dataset)
 	if err != nil {
 		return h, dbError(ctx, err)
 	}
@@ -173,6 +183,7 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 		return store.Refuse("query_result_limit_exceeded")
 	}
 	size := rest.bytes
+	schemaChanged := len(before.Types) != len(after.Types)
 	for id, m := range after.Types {
 		raw, err := p.MarshalWire(m)
 		if err != nil {
@@ -192,6 +203,7 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 				continue
 			}
 		}
+		schemaChanged = true
 		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_types" ("dataset_id","type_id","body") VALUES ($1,$2,$3) ON CONFLICT ("dataset_id","type_id") DO UPDATE SET "body"=excluded."body"`, dataset, id, raw); err != nil {
 			return dbError(ctx, err)
 		}
@@ -235,9 +247,17 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 			}
 		}
 	}
+	var schemaKey any
+	if schemaChanged {
+		key, err := schemaCacheKey(ctx, tx, dataset)
+		if err != nil {
+			return err
+		}
+		schemaKey = key
+	}
 	// The count and size are the dataset's after this write: what the images
 	// hold now, and what lay outside them untouched.
-	if _, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "next_id"=$1,"watermark"=$2,"object_count"=$3,"object_bytes"=$4 WHERE "dataset_id"=$5`, strconv.FormatUint(after.Next, 10), after.Watermark, rest.rows+len(after.Objects), objectBytes, dataset); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "next_id"=$1,"watermark"=$2,"object_count"=$3,"object_bytes"=$4,"schema_cache_key"=coalesce($5,"schema_cache_key") WHERE "dataset_id"=$6`, strconv.FormatUint(after.Next, 10), after.Watermark, rest.rows+len(after.Objects), objectBytes, schemaKey, dataset); err != nil {
 		return dbError(ctx, err)
 	}
 	return nil

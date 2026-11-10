@@ -911,8 +911,9 @@ func recount(ctx context.Context, tx *sql.Tx) error {
 // then is taken as not yet cleaned, so the next pass removes its bytes.
 var archiveColumnFills = map[string]map[string]func() backupValue{
 	"tessera_dataset": {
-		"object_count": zeroValue,
-		"object_bytes": zeroValue,
+		"object_count":     zeroValue,
+		"object_bytes":     zeroValue,
+		"schema_cache_key": func() backupValue { return backupValue{Kind: "null"} },
 	},
 	"tessera_imports": {
 		"cleaned": zeroValue,
