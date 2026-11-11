@@ -19,9 +19,10 @@ import (
 // created with. Bounds belong to the dataset, not to the storage: they are
 // stored on its row and advertised in its description.
 type held struct {
-	image  recordstate.Image
-	auth   store.Authorization
-	limits p.Limits
+	image   recordstate.Image
+	auth    store.Authorization
+	limits  p.Limits
+	managed managedPlan
 }
 
 // load reads one dataset.
@@ -42,7 +43,8 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	image := &h.image
 	var secret, creatorSecret, bounds []byte
 	var next string
-	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret",coalesce("creator_secret","secret"),"next_id","watermark","limits" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &creatorSecret, &next, &image.Watermark, &bounds)
+	var schemaKey, managedKey sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret",coalesce("creator_secret","secret"),"next_id","watermark","limits","schema_cache_key","managed_key" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &creatorSecret, &next, &image.Watermark, &bounds, &schemaKey, &managedKey)
 	if err == sql.ErrNoRows {
 		// not_found means proven retirement and nothing else. Without evidence
 		// in the retirement ledger this identity may name a dataset that never
@@ -81,10 +83,14 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	}
 	copy(image.Secret[:], secret)
 	copy(image.CreatorSecret[:], creatorSecret)
-	var size int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(length("body")),0) FROM "tessera_types" WHERE "dataset_id"=$1`, dataset).Scan(&size); err != nil {
-		return h, dbError(ctx, err)
+	cached, hit := s.schemas.get(schemaKey.String)
+	size := cached.bytes
+	if !hit {
+		if err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(length("body")),0) FROM "tessera_types" WHERE "dataset_id"=$1`, dataset).Scan(&size); err != nil {
+			return h, dbError(ctx, err)
+		}
 	}
+	schemaBytes := size
 	if objects {
 		var count, objectBytes int64
 		if err = tx.QueryRowContext(ctx, `SELECT "object_count","object_bytes" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&count, &objectBytes); err != nil {
@@ -102,33 +108,45 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		return h, store.RefuseWith("query_result_limit_exceeded", "materialization_limit",
 			map[string]any{"maximum": h.limits.MaxMaterializedBytes})
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT "type_id","body" FROM "tessera_types" WHERE "dataset_id"=$1`, dataset)
-	if err != nil {
-		return h, dbError(ctx, err)
-	}
-	for rows.Next() {
-		var id string
-		var raw []byte
-		if err = rows.Scan(&id, &raw); err != nil {
-			break
+	if hit {
+		image.Types = cached.types
+	} else {
+		rows, err := tx.QueryContext(ctx, `SELECT "type_id","body" FROM "tessera_types" WHERE "dataset_id"=$1`, dataset)
+		if err != nil {
+			return h, dbError(ctx, err)
 		}
-		var m p.Meta
-		if err = json.Unmarshal(raw, &m); err != nil {
-			break
+		for rows.Next() {
+			var id string
+			var raw []byte
+			if err = rows.Scan(&id, &raw); err != nil {
+				break
+			}
+			var m p.Meta
+			if err = json.Unmarshal(raw, &m); err != nil {
+				break
+			}
+			image.Types[id] = m
 		}
-		image.Types[id] = m
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return h, dbError(ctx, err)
+		}
+		s.schemas.put(schemaKey.String, cachedSchema{types: image.Types, bytes: schemaBytes})
 	}
-	if err == nil {
-		err = rows.Err()
+	cacheKey := schemaKey.String
+	if cacheKey == "" {
+		cacheKey = dataset + ":" + image.Watermark
 	}
-	rows.Close()
-	if err != nil {
-		return h, dbError(ctx, err)
+	if h.managed, err = s.loadManaged(ctx, tx, dataset, managedKey.String, cacheKey, image.Types); err != nil {
+		return h, err
 	}
 	if !objects {
 		return h, nil
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1`, dataset)
+	rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM `+h.managed.source+` AS o WHERE "dataset_id"=$1`, dataset)
 	if err != nil {
 		return h, dbError(ctx, err)
 	}
@@ -136,10 +154,10 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		var id string
 		var row recordstate.Row
 		var raw []byte
-		if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+		if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 			break
 		}
-		if err = json.Unmarshal(raw, &row.Fields); err != nil {
+		if err = decodeStoredFields(raw, &row); err != nil {
 			break
 		}
 		image.Objects[id] = row
@@ -163,7 +181,7 @@ type outside struct {
 	bytes int
 }
 
-func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before, after recordstate.Image, rest outside) error {
+func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before, after recordstate.Image, rest outside, managed managedMapping) error {
 	if before.Watermark == after.Watermark {
 		return nil
 	}
@@ -174,6 +192,7 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 		return store.Refuse("query_result_limit_exceeded")
 	}
 	size := rest.bytes
+	schemaChanged := len(before.Types) != len(after.Types)
 	for id, m := range after.Types {
 		raw, err := p.MarshalWire(m)
 		if err != nil {
@@ -193,8 +212,16 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 				continue
 			}
 		}
+		schemaChanged = true
 		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_types" ("dataset_id","type_id","body") VALUES ($1,$2,$3) ON CONFLICT ("dataset_id","type_id") DO UPDATE SET "body"=excluded."body"`, dataset, id, raw); err != nil {
 			return dbError(ctx, err)
+		}
+	}
+	hadManaged := len(managed) != 0
+	if schemaChanged && hadManaged {
+		var err error
+		if managed, err = managed.withTypes(after.Types); err != nil {
+			return err
 		}
 	}
 	objectBytes := rest.bytes
@@ -218,8 +245,13 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 				continue
 			}
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","fields") VALUES ($1,$2,$3,$4) ON CONFLICT ("dataset_id","object_id") DO UPDATE SET "type_id"=excluded."type_id","fields"=excluded."fields"`, dataset, id, row.TypeID, raw); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","wire_bytes") VALUES ($1,$2,$3,$4)
+            ON CONFLICT ("dataset_id","object_id") DO UPDATE
+            SET "type_id"=excluded."type_id","wire_bytes"=excluded."wire_bytes"`, dataset, id, row.TypeID, len(raw)); err != nil {
 			return dbError(ctx, err)
+		}
+		if err = s.persistManagedRecord(ctx, tx, dataset, id, managed[row.TypeID], old.Fields, row.Fields, ok); err != nil {
+			return err
 		}
 	}
 	for id := range before.Objects {
@@ -236,9 +268,22 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 			}
 		}
 	}
+	var schemaKey any
+	if schemaChanged {
+		if hadManaged {
+			if err := updateManagedKey(ctx, tx, dataset); err != nil {
+				return err
+			}
+		}
+		key, err := schemaCacheKey(ctx, tx, dataset)
+		if err != nil {
+			return err
+		}
+		schemaKey = key
+	}
 	// The count and size are the dataset's after this write: what the images
 	// hold now, and what lay outside them untouched.
-	if _, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "next_id"=$1,"watermark"=$2,"object_count"=$3,"object_bytes"=$4 WHERE "dataset_id"=$5`, strconv.FormatUint(after.Next, 10), after.Watermark, rest.rows+len(after.Objects), objectBytes, dataset); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "next_id"=$1,"watermark"=$2,"object_count"=$3,"object_bytes"=$4,"schema_cache_key"=coalesce($5,"schema_cache_key") WHERE "dataset_id"=$6`, strconv.FormatUint(after.Next, 10), after.Watermark, rest.rows+len(after.Objects), objectBytes, schemaKey, dataset); err != nil {
 		return dbError(ctx, err)
 	}
 	return nil

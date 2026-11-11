@@ -203,7 +203,7 @@ func TestAnArchiveFromBeforeTheCountsRestoresWithThem(t *testing.T) {
 			keep := []int{}
 			columns := []string{}
 			for j, c := range table.Columns {
-				if c != "object_count" && c != "object_bytes" && c != "creator_secret" {
+				if c != "object_count" && c != "object_bytes" && c != "schema_cache_key" && c != "managed_key" && c != "creator_secret" {
 					keep = append(keep, j)
 					columns = append(columns, c)
 				}

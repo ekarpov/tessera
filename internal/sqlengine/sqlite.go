@@ -38,6 +38,9 @@ type Store struct {
 	// sortHook, when a test sets it, is told each time a sorted query is
 	// answered in SQL order, so a test can tell it was not the fallback.
 	sortHook     func()
+	managed      managedCache
+	managedTypes map[string]approvedManagedType
+	schemas      schemaCache
 	db, reader   *sql.DB
 	lock         *os.File
 	life         sync.RWMutex
@@ -159,7 +162,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		return nil, dbError(ctx, err)
 	}
 	if version == 0 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV1); err != nil {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteCurrent); err != nil {
 			return nil, dbError(ctx, err)
 		}
 		if limits.MaxMaterializedBytes <= 0 {
@@ -180,89 +183,48 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if e != nil {
 			return nil, e
 		}
-		// Written against the original schema, which the migrations below then
-		// reshape: a new database is created at version 1 and migrated forward
-		// like any other, so this row still carries the column that keyed it.
-		_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("singleton","dataset_id","secret","next_id","watermark","limits") VALUES (1,$1,$2,$3,$4,$5)`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_dataset" ("dataset_id","secret","next_id","watermark","limits","display_name") VALUES ($1,$2,$3,$4,$5,'Tessera dataset')`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, raw); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version > 16 {
+		if err = s.refreshManagedViews(ctx, tx); err != nil {
+			return nil, err
+		}
+	} else if version <= 16 && version > 0 {
+		// Only pre-v0.1.0 databases need the historical schema steps.
+		historical := [...]string{
+			migrations.SQLiteV2, migrations.SQLiteV3, migrations.SQLiteV4,
+			migrations.SQLiteV5, migrations.SQLiteV6, migrations.SQLiteV7,
+			migrations.SQLiteV8, migrations.SQLiteV9, migrations.SQLiteV10,
+			migrations.SQLiteV11, migrations.SQLiteV12, migrations.SQLiteV13,
+			migrations.SQLiteV14, migrations.SQLiteV15,
+		}
+		for _, step := range historical[min(version-1, len(historical)):] {
+			if _, err = tx.ExecContext(ctx, step); err != nil {
+				return nil, dbError(ctx, err)
+			}
+		}
+		if version == 16 {
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_dataset" RENAME COLUMN "creator_secret" TO "legacy_creator_secret"`); err != nil {
+				return nil, dbError(ctx, err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteManagedUpgrade); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.migrateRecordFields(ctx, tx); err != nil {
+			return nil, err
+		}
+	} else if version != 18 && version != 19 {
 		return nil, store.Refuse("not_supported")
 	}
-	if version < 2 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV2); err != nil {
+	if version != 0 && version != 19 {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteCreatorUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	}
-	if version < 3 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV3); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 4 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV4); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 5 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV5); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 6 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV6); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 7 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV7); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 8 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV8); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 9 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV9); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 10 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV10); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 11 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV11); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 12 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV12); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 13 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV13); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 14 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV14); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 15 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV15); err != nil {
-			return nil, dbError(ctx, err)
-		}
-	}
-	if version < 16 {
-		if _, err = tx.ExecContext(ctx, migrations.SQLiteV16); err != nil {
-			return nil, dbError(ctx, err)
+		if version == 16 {
+			if err = carryCreatorSecret(ctx, tx); err != nil {
+				return nil, err
+			}
 		}
 	}
 	var bounds p.Limits
@@ -651,13 +613,18 @@ func (s *Store) read(ctx context.Context, a store.Access, dataset string, object
 		// Built without the records, so a request for one by identity reads
 		// that row and stops. An evaluation that would scan is refused by the
 		// wrapper the caller supplied rather than answered from what is here.
-		engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) { return fetchRow(ctx, tx, dataset, id) })
+		engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) {
+			return fetchRow(ctx, tx, h.managed.source, dataset, id)
+		})
 		engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-			return s.scanObjects(ctx, tx, dataset, types, visit)
+			return s.scanObjectsWhere(ctx, tx, dataset, types, "", h.managed, nil, visit)
+		})
+		engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+			return s.scanObjectsWhere(ctx, tx, dataset, types, after, h.managed, predicates, visit)
 		})
 		if !s.unsortedReads {
 			engine.SetSortedScanSource(func(types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
-				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), types, keys, from, admit, visit)
+				return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.managed, types, keys, from, admit, visit)
 			})
 		}
 	}
@@ -683,6 +650,10 @@ func (s *Store) scanObjects(ctx context.Context, tx *sql.Tx, dataset string, typ
 // scanObjectsFrom is scanObjects starting after an identity, for a page that
 // continues a sequence from where the last one ended.
 func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, visit func(string, recordstate.Row) (bool, error)) error {
+	return s.scanObjectsWhere(ctx, tx, dataset, types, after, s.readPlan(nil, nil), nil, visit)
+}
+
+func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string, types []string, after string, managed managedPlan, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
 	if len(types) == 0 {
 		return nil
 	}
@@ -697,10 +668,32 @@ func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string,
 	if s.postgres {
 		identity = `"object_id" COLLATE "C"`
 	}
-	resume := "$" + strconv.Itoa(len(types)+2)
-	limit := "$" + strconv.Itoa(len(types)+3)
-	query := `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1 AND "type_id" IN (` +
-		strings.Join(placeholders, ",") + `) AND ` + identity + ` > ` + resume + ` ORDER BY ` + identity + ` LIMIT ` + limit
+	scope := `"dataset_id"=$1 AND "type_id" IN (` + strings.Join(placeholders, ",") + ")"
+	for _, predicate := range predicates {
+		table, column, where := managed.values+" AS v", `"number"`, `"dataset_id"=$1 AND "kind"='integer'`
+		if layout, fieldColumn, ok := managed.mapping.field(types, predicate.Field, p.IntegerType); ok {
+			table, column, where = layout.table(), fieldColumn, `"dataset_id"=$1`
+		} else {
+			args = append(args, predicate.Field)
+			where += ` AND "field_id"=$` + strconv.Itoa(len(args))
+		}
+		for _, bound := range []struct {
+			operator string
+			value    *p.Value
+		}{
+			{"=", predicate.Exact}, {">=", predicate.Lower}, {"<=", predicate.Upper},
+		} {
+			if bound.value != nil {
+				args = append(args, bound.value.Payload().(int64))
+				where += " AND " + column + bound.operator + "$" + strconv.Itoa(len(args))
+			}
+		}
+		scope += ` AND "object_id" IN (SELECT "object_id" FROM ` + table + " WHERE " + where + ")"
+	}
+	resume := "$" + strconv.Itoa(len(args)+1)
+	limit := "$" + strconv.Itoa(len(args)+2)
+	query := s.numbered(`SELECT "object_id","type_id","fields","wire_bytes" FROM ` + managed.source + ` AS o WHERE ` +
+		scope + ` AND ` + identity + ` > ` + resume + ` ORDER BY ` + identity + ` LIMIT ` + limit)
 	// Read in batches that start small and grow, each resuming after the last
 	// identity the one before returned. One unbounded statement let a query
 	// that stops after ten rows cost the whole type on PostgreSQL: the server
@@ -718,18 +711,17 @@ func (s *Store) scanObjectsFrom(ctx context.Context, tx *sql.Tx, dataset string,
 			var id string
 			var row recordstate.Row
 			var raw []byte
-			if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+			if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 				rows.Close()
 				return dbError(ctx, err)
 			}
 			read++
 			last = id
-			if json.Unmarshal(raw, &row.Fields) != nil {
+			if decodeStoredFields(raw, &row) != nil {
 				rows.Close()
 				return store.Refuse("internal_error")
 			}
 			row.Sequence, _ = strconv.ParseUint(id, 10, 64)
-			row.Bytes = len(raw)
 			more, e := visit(id, row)
 			if e != nil || !more {
 				rows.Close()
@@ -794,7 +786,7 @@ func (s *Store) evaluate(ctx context.Context, sqltx *sql.Tx, a store.Access, dat
 	if err != nil {
 		return err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, outside{}, h.managed.mapping); err != nil {
 		return err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -829,10 +821,10 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 		if s.fetchHook != nil {
 			s.fetchHook()
 		}
-		return fetchRow(ctx, sqltx, dataset, id)
+		return fetchRow(ctx, sqltx, h.managed.source, dataset, id)
 	})
 	engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-		return s.scanObjects(ctx, sqltx, dataset, types, visit)
+		return s.scanObjectsWhere(ctx, sqltx, dataset, types, "", h.managed, nil, visit)
 	})
 	engine.EnableSourcedWrites()
 	if s.contentDir != "" {
@@ -864,7 +856,7 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 	if err != nil {
 		return true, err
 	}
-	if err = s.persist(ctx, sqltx, h.limits, before, after, rest); err != nil {
+	if err = s.persist(ctx, sqltx, h.limits, before, after, rest, h.managed.mapping); err != nil {
 		return true, err
 	}
 	if s.contentDir != "" && before.Watermark != after.Watermark {
@@ -874,18 +866,18 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 }
 
 // fetchRow reads one record by identity.
-func fetchRow(ctx context.Context, tx *sql.Tx, dataset, id string) (recordstate.Row, bool, error) {
+func fetchRow(ctx context.Context, tx *sql.Tx, source, dataset, id string) (recordstate.Row, bool, error) {
 	var row recordstate.Row
 	var raw []byte
 	var mintedID string
-	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw)
+	err := tx.QueryRowContext(ctx, `SELECT "object_id","type_id","fields","wire_bytes" FROM `+source+` AS o WHERE "dataset_id"=$1 AND "object_id"=$2`, dataset, id).Scan(&mintedID, &row.TypeID, &raw, &row.Bytes)
 	if err == sql.ErrNoRows {
 		return row, false, nil
 	}
 	if err != nil {
 		return row, false, dbError(ctx, err)
 	}
-	if json.Unmarshal(raw, &row.Fields) != nil {
+	if decodeStoredFields(raw, &row) != nil {
 		return row, false, store.Refuse("internal_error")
 	}
 	row.Sequence, _ = strconv.ParseUint(mintedID, 10, 64)

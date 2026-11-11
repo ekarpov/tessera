@@ -50,7 +50,8 @@ type Store struct {
 	// the order this evaluator sorts by. A source that yielded any other
 	// order would make early termination return the wrong rows while every
 	// row it returned was genuinely a match — a wrong answer that looks right.
-	scan func(typeIDs []string, visit func(id string, row Row) (bool, error)) error
+	scan        func(typeIDs []string, visit func(id string, row Row) (bool, error)) error
+	integerScan func(typeIDs []string, after string, predicates []*p.Predicate, visit func(id string, row Row) (bool, error)) error
 	// sorted streams the records of the named types in a result sort's order
 	// rather than identity order. See SetSortedScanSource.
 	sorted SortedScan
@@ -317,6 +318,51 @@ func (s *Store) SetObjectSource(source func(id string) (Row, bool, error)) { s.s
 // refuses to scan at all rather than answering from the empty image it holds.
 func (s *Store) SetScanSource(scan func(typeIDs []string, visit func(id string, row Row) (bool, error)) error) {
 	s.scan = scan
+}
+
+// SetIntegerScanSource installs an indexed source for exact integer and
+// inclusive integer range predicates on declared integer fields.
+func (s *Store) SetIntegerScanSource(scan func([]string, string, []*p.Predicate, func(string, Row) (bool, error)) error) {
+	s.integerScan = scan
+}
+
+func (t *transaction) integerPredicates(typeID string, predicate *p.Predicate) []*p.Predicate {
+	if t.originals != nil || t.engine.integerScan == nil || predicate == nil {
+		return nil
+	}
+	meta, err := t.effective(typeID)
+	if err != nil {
+		return nil
+	}
+	var accepted []*p.Predicate
+	var visit func(*p.Predicate)
+	visit = func(node *p.Predicate) {
+		// Leave larger conjunctions to the evaluator rather than generating
+		// an unbounded number of SQL subqueries or bind parameters.
+		if node == nil || len(accepted) >= 8 {
+			return
+		}
+		switch node.Kind {
+		case "and":
+			for _, child := range node.Children {
+				visit(child)
+			}
+		case "field":
+			for _, value := range []*p.Value{node.Exact, node.Lower, node.Upper} {
+				if value != nil && value.Type() != p.IntegerType {
+					return
+				}
+			}
+			for _, field := range meta.Fields {
+				if field.ID == node.Field && field.Type == p.IntegerType {
+					accepted = append(accepted, node)
+					return
+				}
+			}
+		}
+	}
+	visit(predicate)
+	return accepted
 }
 
 // SortKey is one term of a result sort, with the type every value of that
@@ -1161,6 +1207,11 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 		if after != "" && t.originals == nil && t.engine.scanFrom != nil {
 			scan = func(types []string, visit func(string, Row) (bool, error)) error {
 				return t.engine.scanFrom(types, after, visit)
+			}
+		}
+		if predicates := t.integerPredicates(typeID, predicate); len(predicates) != 0 {
+			scan = func(types []string, visit func(string, Row) (bool, error)) error {
+				return t.engine.integerScan(types, after, predicates, visit)
 			}
 		}
 		err = scan(types, func(id string, row Row) (bool, error) {

@@ -1,4 +1,4 @@
-// Package migrations embeds hand-written SQLite schema migrations.
+// Package migrations embeds bootstrap schemas and forward upgrades.
 package migrations
 
 import _ "embed"
@@ -87,8 +87,20 @@ var SQLiteV15 string
 //go:embed 013_postgres.sql
 var PostgresV13 string
 
-//go:embed 016_sqlite.sql
-var SQLiteV16 string
+//go:embed current_postgres.sql
+var PostgresCurrent string
 
-//go:embed 014_postgres.sql
-var PostgresV14 string
+//go:embed current_sqlite.sql
+var SQLiteCurrent string
+
+//go:embed 016_postgres.sql
+var PostgresManagedUpgrade string
+
+//go:embed 018_sqlite.sql
+var SQLiteManagedUpgrade string
+
+//go:embed 019_sqlite.sql
+var SQLiteCreatorUpgrade string
+
+//go:embed 017_postgres.sql
+var PostgresCreatorUpgrade string

@@ -3,10 +3,11 @@ package sqlengine
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ekarpov/tessera/internal/recordstate"
 	p "github.com/ekarpov/tessera/pkg/protocol"
@@ -19,26 +20,12 @@ import (
 // order of every row against its own comparison; this supplies the order and
 // nothing else.
 //
-// Only types whose stored values SQL orders exactly as the protocol does are
-// taken, and the rest are left to the evaluator:
-//
-//   - integer and float: SQLite compares integers and reals numerically and
-//     exactly; PostgreSQL reads the stored text as numeric, which is exact, and
-//     a float is stored in its shortest round-trip spelling, which orders as
-//     the doubles do.
-//   - boolean: false before true, as 0 before 1.
-//   - text and date_time: by code point, which is byte order over UTF-8.
-//     SQLite's default collation is that; PostgreSQL is asked for COLLATE "C".
-//     A timestamp is one fixed-width spelling, so its text order is its time
-//     order.
-//
-// fixed is a decimal carried as a string, which neither engine orders exactly
-// without parsing; a reference orders by three strings. Both are left out.
-//
+// Only orderings that can use the exact protocol representation are pushed
+// into SQL. Other types are sorted by the evaluator.
 // Nulls are placed explicitly, first ascending and last descending, because
 // PostgreSQL's default is the opposite. The final tie-break is the object
 // identifier by byte order, as in scanObjects.
-func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, cut uint64, types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
+func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, cut uint64, managed managedPlan, types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
 	if len(types) == 0 || len(keys) == 0 {
 		return false, nil
 	}
@@ -64,9 +51,22 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 	scopeArgs := len(args)
 	order := make([]string, 0, len(keys)+1)
 	expressions := make([]string, len(keys))
+	source := managed.source + ` AS "o"`
+	directTime := false
 	for i, key := range keys {
 		args = append(args, key.FieldID)
-		expression, ok := s.sortExpression(key.Type, "$"+strconv.Itoa(len(args)))
+		parameter := "$" + strconv.Itoa(len(args))
+		expression, ok := s.typedSortExpression(key.Type, parameter, managed.values)
+		if layout, column, found := managed.mapping.field(types, key.FieldID, key.Type); found && ok {
+			args = args[:len(args)-1]
+			if len(keys) == 1 && key.Type == p.DateTimeType {
+				source += " JOIN " + layout.table() + ` AS "m" USING ("dataset_id","object_id")`
+				expression = `"m".` + column
+				directTime = true
+			} else {
+				expression = s.managedSortExpression(layout, column, key.Type)
+			}
+		}
 		if !ok {
 			return false, nil
 		}
@@ -78,13 +78,16 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 		}
 	}
 	identity := `"object_id"`
+	if directTime {
+		identity = `"m"."object_id"`
+	}
 	if s.postgres {
-		identity = `"object_id" COLLATE "C"`
+		identity += ` COLLATE "C"`
 	}
 	order = append(order, identity+" ASC")
 	selected := scope
 	if from != nil {
-		after, ok := s.sortsAfter(keys, expressions, identity, from, &args)
+		after, ok := s.sortsAfter(keys, expressions, identity, from, &args, directTime)
 		if !ok {
 			return false, nil
 		}
@@ -104,8 +107,8 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 	}
 	limit := "$" + strconv.Itoa(len(args)+1)
 	offset := "$" + strconv.Itoa(len(args)+2)
-	query := s.numbered(`SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE ` + selected +
-		` ORDER BY ` + strings.Join(order, ",") + ` LIMIT ` + limit + ` OFFSET ` + offset)
+	query := s.numbered(`SELECT "object_id","type_id","fields","wire_bytes" FROM ` + source + ` WHERE ` +
+		selected + ` ORDER BY ` + strings.Join(order, ",") + ` LIMIT ` + limit + ` OFFSET ` + offset)
 	// Batches grow as scanObjects' do, and resume by offset rather than by
 	// key: a sort key is not unique and may be null, and the order is total
 	// only with the identity appended. Every batch runs in this transaction's
@@ -121,17 +124,16 @@ func (s *Store) sortedObjects(ctx context.Context, tx *sql.Tx, dataset string, c
 			var id string
 			var row recordstate.Row
 			var raw []byte
-			if err = rows.Scan(&id, &row.TypeID, &raw); err != nil {
+			if err = rows.Scan(&id, &row.TypeID, &raw, &row.Bytes); err != nil {
 				rows.Close()
 				return true, dbError(ctx, err)
 			}
 			read++
-			if json.Unmarshal(raw, &row.Fields) != nil {
+			if decodeStoredFields(raw, &row) != nil {
 				rows.Close()
 				return true, store.Refuse("internal_error")
 			}
 			row.Sequence, _ = strconv.ParseUint(id, 10, 64)
-			row.Bytes = len(raw)
 			more, e := visit(id, row)
 			if e != nil || !more {
 				rows.Close()
@@ -173,12 +175,27 @@ func (s *Store) numbered(statement string) string {
 // equal and the identity after. "After" is the order's own: ascending with
 // nulls first, a null is followed by every value; descending with nulls last,
 // nothing but a null follows a null, and a null follows every value.
-func (s *Store) sortsAfter(keys []recordstate.SortKey, expressions []string, identity string, from *recordstate.SortFrom, args *[]any) (string, bool) {
+func (s *Store) sortsAfter(keys []recordstate.SortKey, expressions []string, identity string, from *recordstate.SortFrom, args *[]any, directTime bool) (string, bool) {
 	if len(from.Values) != len(keys) {
 		return "", false
 	}
 	bind := func(key recordstate.SortKey, v p.Value) (string, bool) {
 		param, ok := s.sortParameter(key.Type, v)
+		if directTime {
+			raw, valid := param.(string)
+			if !valid {
+				return "", false
+			}
+			if s.postgres {
+				stamp, err := time.Parse(time.RFC3339Nano, raw)
+				if err != nil {
+					return "", false
+				}
+				*args = append(*args, stamp)
+				return "$" + strconv.Itoa(len(*args)) + "::timestamptz", true
+			}
+			param = []byte(raw)
+		}
 		if !ok {
 			return "", false
 		}
@@ -186,10 +203,10 @@ func (s *Store) sortsAfter(keys []recordstate.SortKey, expressions []string, ide
 		placeholder := "$" + strconv.Itoa(len(*args))
 		if s.postgres {
 			switch key.Type {
-			case p.IntegerType, p.FloatType:
-				return placeholder + "::numeric", true
-			case p.BooleanType:
-				return placeholder + "::boolean", true
+			case p.IntegerType, p.FloatType, p.BooleanType:
+				return placeholder + "::bigint", true
+			case p.TextType:
+				return placeholder + "::bytea", true
 			default:
 				return placeholder + `::text COLLATE "C"`, true
 			}
@@ -229,59 +246,78 @@ func (s *Store) sortsAfter(keys []recordstate.SortKey, expressions []string, ide
 	return "(" + strings.Join(alternatives, " OR ") + ")", true
 }
 
-// sortParameter is a sort value as the statement compares it: PostgreSQL
-// casts the text it is given as the field's expression does, and SQLite
-// compares the typed values json_extract yields.
+// Sort parameter encodings match the physical values, including binary64
+// order and text byte order. Both signed zeros have the same rank.
 func (s *Store) sortParameter(kind p.Type, v p.Value) (any, bool) {
 	if v.Type() != kind {
 		return nil, false
 	}
 	switch payload := v.Payload().(type) {
 	case int64:
-		if s.postgres {
-			return strconv.FormatInt(payload, 10), true
-		}
 		return payload, true
 	case float64:
-		if s.postgres {
-			return strconv.FormatFloat(payload, 'g', -1, 64), true
+		bits := int64(math.Float64bits(payload))
+		if bits < 0 {
+			bits = math.MinInt64 - bits
 		}
-		return payload, true
+		return bits, true
 	case bool:
-		if s.postgres {
-			return strconv.FormatBool(payload), true
-		}
 		if payload {
-			return 1, true
+			return int64(1), true
 		}
-		return 0, true
+		return int64(0), true
 	case string:
+		if kind == p.TextType {
+			return []byte(payload), true
+		}
 		return payload, true
 	}
 	return nil, false
 }
 
-// sortExpression is the SQL value one stored field sorts by, with the field
-// identifier bound as a parameter rather than written into the statement.
-func (s *Store) sortExpression(kind p.Type, field string) (string, bool) {
-	if s.postgres {
-		value := `(convert_from("fields",'UTF8')::jsonb -> ` + field + `::text ->> 'value')`
-		switch kind {
-		case p.IntegerType, p.FloatType:
-			return value + `::numeric`, true
-		case p.BooleanType:
-			return value + `::boolean`, true
-		case p.TextType, p.DateTimeType:
-			return value + ` COLLATE "C"`, true
+func floatOrder(column string) string {
+	return "(CASE WHEN " + column + "<0 THEN CAST('-9223372036854775808' AS BIGINT)-" + column + " ELSE " + column + " END)"
+}
+
+// Typed scalar orderings preserve the evaluator’s comparison. An absent field yields SQL NULL from the scalar subquery. The
+// sort reads that field without assembling the rest of each candidate.
+func (s *Store) typedSortExpression(kind p.Type, field, values string) (string, bool) {
+	var value string
+	switch kind {
+	case p.IntegerType, p.BooleanType:
+		value = `"v"."number"`
+	case p.FloatType:
+		value = floatOrder(`"v"."number"`)
+	case p.TextType:
+		value = `"v"."data"`
+	case p.DateTimeType:
+		value = `CAST("v"."data" AS TEXT)`
+		if s.postgres {
+			value = `convert_from("v"."data", 'UTF8') COLLATE "C"`
 		}
+	default:
 		return "", false
 	}
-	// The column is a BLOB, and this SQLite reads a BLOB given to its JSON
-	// functions as its own binary JSON. The stored bytes are JSON text.
-	value := `json_extract(CAST("fields" AS TEXT), '$."' || ` + field + ` || '".value')`
-	switch kind {
-	case p.IntegerType, p.FloatType, p.BooleanType, p.TextType, p.DateTimeType:
-		return value, true
+	expression := `(SELECT ` + value + ` FROM ` + values + ` AS "v"
+        WHERE "v"."dataset_id"="o"."dataset_id" AND "v"."object_id"="o"."object_id"
+        AND "v"."field_id"=` + field + `)`
+	if s.postgres && kind == p.DateTimeType {
+		expression += ` COLLATE "C"`
 	}
-	return "", false
+	return expression, true
+}
+
+func (s *Store) managedSortExpression(layout installedLayout, column string, kind p.Type) string {
+	value := "v." + column
+	if kind == p.FloatType {
+		value = floatOrder(value)
+	}
+	if kind == p.DateTimeType {
+		if s.postgres {
+			value = managedTimestampText(value) + ` COLLATE "C"`
+		} else {
+			value = "CAST(" + value + " AS TEXT)"
+		}
+	}
+	return "(SELECT " + value + " FROM " + layout.table() + ` AS v WHERE v."dataset_id"="o"."dataset_id" AND v."object_id"="o"."object_id")`
 }

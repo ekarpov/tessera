@@ -92,20 +92,57 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := replyWatermark(reply.Body)
-	// Model the preceding SQLite schema, whose receipts retained only the body,
-	// whose transfer tokens carried no representation, and whose claims named no
-	// executor. Every column a later migration adds has to go, or reopening
-	// re-adds one that already exists — and an indexed column cannot be dropped
-	// while the index still names it.
-	for _, statement := range []string{`DROP INDEX "tessera_receipts_retention_deadline"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "retain_until"`, `DROP INDEX "tessera_receipts_executor"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "executor_id"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "watermark"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "replay_scope"`, `ALTER TABLE "tessera_transfer_tokens" DROP COLUMN "representation"`, `ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`, `DROP INDEX "tessera_imports_uncleaned"`, `ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`, `DROP TABLE "tessera_page_rows"`, `ALTER TABLE "tessera_pages" DROP COLUMN "position"`, `ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`, `PRAGMA user_version=5`} {
-		if _, err = s.db.ExecContext(t.Context(), statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	archive := filepath.Join(t.TempDir(), "legacy.enc")
+	payloads := legacyRecordPayloads(t, s)
+	archive := filepath.Join(t.TempDir(), "current.enc")
 	backupKey := bytes.Repeat([]byte{31}, 32)
 	if err = s.Backup(t.Context(), archive, backupKey); err != nil {
 		t.Fatal(err)
+	}
+	older := filepath.Join(t.TempDir(), "legacy.enc")
+	rewriteArchive(t, archive, older, backupKey, func(m *backupManifest) {
+		for _, table := range m.Tables {
+			switch table.Name {
+			case "tessera_objects":
+				if len(table.Columns) != 4 || table.Columns[3] != "fields" || len(table.Rows) != 1 {
+					t.Fatal("backup must pack the record fields into a single archive row")
+				}
+				row := table.Rows[0]
+				if !bytes.Equal(row[3].Bytes, payloads[dataset][*row[1].Text]) {
+					t.Fatal("backup payload did not preserve the record fields")
+				}
+			case "tessera_field_values":
+				if len(table.Rows) != 0 {
+					t.Fatal("backup repeated fields as expanded SQL rows")
+				}
+			}
+		}
+		m.Tables = m.Tables[:len(m.Tables)-3]
+		for i := range m.Tables {
+			table := &m.Tables[i]
+			switch table.Name {
+			case "tessera_dataset":
+				stripBackupColumn(table, "creator_secret")
+				stripBackupColumn(table, "managed_key")
+			case "tessera_receipts":
+				for _, name := range []string{"retain_until", "executor_id", "watermark", "replay_scope"} {
+					stripBackupColumn(table, name)
+				}
+			}
+		}
+	})
+	demoteRecordColumns(t, s, payloads)
+	for _, statement := range []string{
+		`DROP INDEX "tessera_receipts_retention_deadline"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "retain_until"`,
+		`DROP INDEX "tessera_receipts_executor"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "executor_id"`,
+		`ALTER TABLE "tessera_receipts" DROP COLUMN "watermark"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "replay_scope"`,
+		`ALTER TABLE "tessera_transfer_tokens" DROP COLUMN "representation"`, `ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`,
+		`DROP INDEX "tessera_imports_uncleaned"`, `ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,
+		`DROP TABLE "tessera_page_rows"`, `ALTER TABLE "tessera_pages" DROP COLUMN "position"`,
+		`ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`, `PRAGMA user_version=5`,
+	} {
+		if _, err = s.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
@@ -124,7 +161,7 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 	}
 	check(s)
 	restoredPath := filepath.Join(t.TempDir(), "restored.db")
-	if err = RestoreBackup(t.Context(), archive, restoredPath, "", path+".retired", backupKey); err != nil {
+	if err = RestoreBackup(t.Context(), older, restoredPath, "", path+".retired", backupKey); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := Open(t.Context(), restoredPath, p.DevelopmentLimits())

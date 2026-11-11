@@ -46,15 +46,20 @@ func (s *Store) pageEngine(ctx context.Context, tx *sql.Tx, a store.Access, data
 	if err != nil {
 		return nil, h, err
 	}
-	engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) { return fetchRow(ctx, tx, dataset, id) })
+	engine.SetObjectSource(func(id string) (recordstate.Row, bool, error) {
+		return fetchRow(ctx, tx, h.managed.source, dataset, id)
+	})
 	engine.SetScanSource(func(types []string, visit func(string, recordstate.Row) (bool, error)) error {
-		return s.scanObjects(ctx, tx, dataset, types, visit)
+		return s.scanObjectsWhere(ctx, tx, dataset, types, "", h.managed, nil, visit)
 	})
 	engine.SetScanFromSource(func(types []string, after string, visit func(string, recordstate.Row) (bool, error)) error {
-		return s.scanObjectsFrom(ctx, tx, dataset, types, after, visit)
+		return s.scanObjectsWhere(ctx, tx, dataset, types, after, h.managed, nil, visit)
+	})
+	engine.SetIntegerScanSource(func(types []string, after string, predicates []*p.Predicate, visit func(string, recordstate.Row) (bool, error)) error {
+		return s.scanObjectsWhere(ctx, tx, dataset, types, after, h.managed, predicates, visit)
 	})
 	engine.SetSortedScanSource(func(types []string, keys []recordstate.SortKey, from *recordstate.SortFrom, admit func(int) error, visit func(string, recordstate.Row) (bool, error)) (bool, error) {
-		return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), types, keys, from, admit, visit)
+		return s.sortedObjects(ctx, tx, dataset, h.auth.View.SequenceCut(), h.managed, types, keys, from, admit, visit)
 	})
 	return engine, h, nil
 }
