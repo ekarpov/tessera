@@ -349,6 +349,22 @@ func TestCreatorAttributionAndReceiptsSurviveRepeatedRestore(t *testing.T) {
 		if err := s.Backup(t.Context(), archive, backupKey); err != nil {
 			t.Fatal(err)
 		}
+		if i == 1 {
+			// Model an archive taken after creator keys were introduced but
+			// before the managed storage columns and tables existed.
+			legacy := filepath.Join(dir, "creator-only.enc")
+			rewriteArchive(t, archive, legacy, backupKey, func(m *backupManifest) {
+				m.Tables = m.Tables[:len(m.Tables)-3]
+				for j := range m.Tables {
+					table := &m.Tables[j]
+					if table.Name == "tessera_dataset" {
+						stripBackupColumn(table, "schema_cache_key")
+						stripBackupColumn(table, "managed_key")
+					}
+				}
+			})
+			archive = legacy
+		}
 		if err := RestoreBackup(t.Context(), archive, destination, "", source+".retired", backupKey); err != nil {
 			t.Fatal(err)
 		}
