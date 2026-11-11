@@ -20,6 +20,16 @@ import (
 // to go, or reopening re-adds one that already exists. The names are the ones
 // the forward migration drops by name, so they have to be restored exactly.
 var singletonSchema = []string{
+
+	`DROP VIEW "tessera_read_objects"`,
+	`DROP VIEW "tessera_all_field_values"`,
+	`DROP TABLE "tessera_managed_installations"`,
+	`DROP TABLE "tessera_managed_layouts"`,
+	`DROP TABLE "tessera_field_values"`,
+	`ALTER TABLE "tessera_objects" DROP COLUMN "wire_bytes"`,
+	`ALTER TABLE "tessera_dataset" DROP COLUMN "managed_key"`,
+	`DROP TRIGGER "tessera_schema_cache_changed" ON "tessera_types"`,
+	`DROP FUNCTION "tessera_invalidate_schema_cache"()`,
 	`ALTER TABLE "tessera_objects" DROP CONSTRAINT "tessera_objects_pkey"`,
 	`ALTER TABLE "tessera_objects" ADD PRIMARY KEY ("object_id")`,
 	`DROP INDEX "tessera_objects_type"`,
@@ -47,6 +57,7 @@ var singletonSchema = []string{
 	`ALTER TABLE "tessera_receipts" DROP COLUMN "executor_id"`,
 	`ALTER TABLE "tessera_dataset" DROP COLUMN "object_count"`,
 	`ALTER TABLE "tessera_dataset" DROP COLUMN "object_bytes"`,
+	`ALTER TABLE "tessera_dataset" DROP COLUMN "schema_cache_key"`,
 	`ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`,
 	`DROP INDEX "tessera_imports_uncleaned"`,
 	`ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,
@@ -137,6 +148,16 @@ func TestPostgresSingletonSchemaMigratesWithItsRecords(t *testing.T) {
 	}
 	before, err := s.Info(t.Context(), owner, dataset)
 	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := p.MarshalWire(map[string]p.Value{"n": amount})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.ExecContext(t.Context(), `ALTER TABLE "tessera_objects" ADD COLUMN "fields" BYTEA NOT NULL DEFAULT convert_to('{}','UTF8')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.ExecContext(t.Context(), `UPDATE "tessera_objects" SET "fields"=$1`, payload); err != nil {
 		t.Fatal(err)
 	}
 	for _, statement := range singletonSchema {

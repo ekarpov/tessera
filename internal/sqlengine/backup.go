@@ -12,18 +12,19 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ekarpov/tessera/internal/recordstate"
 	p "github.com/ekarpov/tessera/pkg/protocol"
 	"github.com/ekarpov/tessera/pkg/store"
 )
 
 const maxBackupBytes = 256 << 20
 
-var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments"}
+var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations"}
 
 type backupValue struct {
 	Bytes   []byte  `json:"bytes,omitempty"`
@@ -240,7 +241,22 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 	manifest := backupManifest{Limits: s.bounds(), Capture: capture}
 	total := 0
 	for _, name := range backupTables {
-		rows, e := tx.QueryContext(ctx, `SELECT * FROM "`+name+`"`)
+		query := `SELECT * FROM "` + name + `"`
+		switch name {
+		case "tessera_objects":
+			// Pack one portable payload per object, as the legacy archive did.
+			// Charging a full archive row for every field exhausted the memory
+			// budget much earlier even for data the previous release could back up.
+			query = `SELECT "dataset_id","object_id","type_id","fields" FROM "tessera_read_objects"`
+			if s.postgres {
+				query = `SELECT "object_id","type_id","dataset_id","fields" FROM "tessera_read_objects"`
+			}
+		case "tessera_field_values":
+			// Retain the archive table inventory. All values now travel with the
+			// object payload, including the managed columns.
+			query += " LIMIT 0"
+		}
+		rows, e := tx.QueryContext(ctx, query)
 		if e != nil {
 			return dbError(ctx, e)
 		}
@@ -258,6 +274,18 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			}
 			if e = rows.Scan(targets...); e != nil {
 				break
+			}
+			if name == "tessera_objects" {
+				raw, ok := values[3].([]byte)
+				var record recordstate.Row
+				if !ok || decodeStoredFields(raw, &record) != nil {
+					e = store.Refuse("internal_error")
+					break
+				}
+				values[3], e = p.MarshalWire(record.Fields)
+				if e != nil {
+					break
+				}
 			}
 			row := make([]backupValue, len(values))
 			for i, value := range values {
@@ -450,7 +478,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			}
 		}
 	}
-	if !manifestFound || len(manifest.Tables) != len(backupTables) {
+	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-2 && len(manifest.Tables) != len(backupTables)-3) {
 		return store.Refuse("invalid_field")
 	}
 	fence, err := os.ReadFile(fencePath)
@@ -520,9 +548,27 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			return dbError(ctx, err)
 		}
 	}
+	var packedObjects backupTable
+	var packedPayloads [][]byte
+	// Packed archives carry the values with their objects and have an empty
+	// field table. Older archives can mix packed and flattened values.
+	packed := len(manifest.Tables) == len(backupTables) &&
+		len(manifest.Tables[slices.Index(backupTables, "tessera_field_values")].Rows) == 0
+
 	for i, table := range manifest.Tables {
 		if table.Name != backupTables[i] {
 			return store.Refuse("invalid_field")
+		}
+		var legacyPayloads [][]byte
+		switch table.Name {
+		case "tessera_dataset":
+			stripBackupColumn(&table, "typed_fields")
+		case "tessera_objects":
+			packed = packed && slices.Contains(table.Columns, "fields") && !slices.Contains(table.Columns, "wire_bytes")
+			legacyPayloads, err = normalizeObjectArchive(&table)
+			if err != nil {
+				return err
+			}
 		}
 		actual, err := tx.QueryContext(ctx, `SELECT * FROM "`+table.Name+`" LIMIT 0`)
 		if err != nil {
@@ -588,12 +634,9 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		if err != nil || strings.Join(columns, "\x00") != strings.Join(table.Columns, "\x00") {
 			return store.Refuse("invalid_field")
 		}
-		parameters := make([]string, len(columns))
-		for i := range parameters {
-			parameters[i] = "$" + strconv.Itoa(i+1)
-		}
-		marks := strings.Join(parameters, ",")
-		for _, row := range table.Rows {
+		insert := restoreInsert{prefix: `INSERT INTO "` + table.Name + `" VALUES `}
+		datasetColumn, objectColumn := slices.Index(columns, "dataset_id"), slices.Index(columns, "object_id")
+		for index, row := range table.Rows {
 			if len(row) != len(columns) {
 				return store.Refuse("invalid_field")
 			}
@@ -602,7 +645,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				switch value.Kind {
 				case "null":
 				case "bytes":
-					values[j] = value.Bytes
+					// Preserve an empty binary value even when the archive omitted its bytes.
+					values[j] = append([]byte{}, value.Bytes...)
 				case "text":
 					values[j] = value.Text
 				case "integer":
@@ -611,10 +655,30 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 					return store.Refuse("invalid_field")
 				}
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO "`+table.Name+`" VALUES (`+marks+`)`, values...); err != nil {
-				return dbError(ctx, err)
+			if err = insert.add(ctx, tx, values); err != nil {
+				return err
+			}
+			if !packed && len(legacyPayloads) != 0 && legacyPayloads[index] != nil {
+				if err = insert.flush(ctx, tx); err != nil {
+					return err
+				}
+				dataset, datasetOK := values[datasetColumn].(*string)
+				id, idOK := values[objectColumn].(*string)
+				if !datasetOK || !idOK || dataset == nil || id == nil {
+					return store.Refuse("invalid_field")
+				}
+				if err = importLegacyFields(ctx, tx, *dataset, *id, legacyPayloads[index]); err != nil {
+					return err
+				}
 			}
 		}
+		if err = insert.flush(ctx, tx); err != nil {
+			return err
+		}
+		if packed && table.Name == "tessera_objects" {
+			packedObjects, packedPayloads = table, legacyPayloads
+		}
+
 	}
 	// A restored copy is a distinct storage and every dataset in it gets its own
 	// fresh version secret: sharing one across the copy would let a watermark
@@ -630,6 +694,9 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// A dataset's record count and size are worked out from the records the
 	// archive holds rather than trusted from it: they are derived, and an
 	// archive from before they were kept has none.
+	if err = s.restoreManagedRows(ctx, tx, packedObjects, packedPayloads); err != nil {
+		return err
+	}
 	if err = recount(ctx, tx); err != nil {
 		return err
 	}
@@ -898,7 +965,7 @@ func datasetIdentities(ctx context.Context, tx *sql.Tx) ([]string, error) {
 func recount(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET
 		"object_count" = (SELECT count(*) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id"),
-		"object_bytes" = (SELECT coalesce(sum(length(o."fields")), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
+		"object_bytes" = (SELECT coalesce(sum(o."wire_bytes"), 0) FROM "tessera_objects" o WHERE o."dataset_id" = "tessera_dataset"."dataset_id")`)
 	if err != nil {
 		return dbError(ctx, err)
 	}
@@ -911,13 +978,17 @@ func recount(ctx context.Context, tx *sql.Tx) error {
 // then is taken as not yet cleaned, so the next pass removes its bytes.
 var archiveColumnFills = map[string]map[string]func() backupValue{
 	"tessera_dataset": {
-		"object_count": zeroValue,
-		"object_bytes": zeroValue,
+		"object_count":     zeroValue,
+		"object_bytes":     zeroValue,
+		"schema_cache_key": nullBackupValue,
+		"managed_key":      nullBackupValue,
 	},
 	"tessera_imports": {
 		"cleaned": zeroValue,
 	},
 }
+
+func nullBackupValue() backupValue { return backupValue{Kind: "null"} }
 
 func zeroValue() backupValue {
 	zero := int64(0)

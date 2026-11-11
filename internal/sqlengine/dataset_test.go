@@ -41,7 +41,7 @@ func seedNeighbour(t *testing.T, s *Store, id string, padding int, objects ...st
 		statements = append(statements, struct {
 			sql       string
 			arguments []any
-		}{`INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","fields") VALUES ($1,$2,$3,$4)`, []any{id, object, typeID, []byte(`{}`)}})
+		}{`INSERT INTO "tessera_objects" ("dataset_id","object_id","type_id","wire_bytes") VALUES ($1,$2,$3,$4)`, []any{id, object, typeID, 2}})
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement.sql, statement.arguments...); err != nil {
@@ -216,6 +216,7 @@ func TestEraseRekeysOnlyItsOwnDataset(t *testing.T) {
 // migration adds has to go, or reopening re-adds one that already exists.
 func demoteToSingletonSchema(t *testing.T, s *Store) {
 	t.Helper()
+	demoteRecordColumns(t, s, legacyRecordPayloads(t, s))
 	// Objects are carried out and dropped before types is rebuilt, for the same
 	// reason the forward migration does it: SQLite refuses to drop a table
 	// another still references, and the carry table declares no foreign key.
@@ -905,7 +906,9 @@ func TestReturningARowDoesNotCostRederivingTheProjection(t *testing.T) {
 	// needs, a ten-row query decodes about ten rows, and the old difference
 	// would have charged every row's decode to the projection — reporting a
 	// regression that was really the optimisation working.
-	none := json.RawMessage(`{"field":{"id":"n","exact":{"type":"integer","value":-1}}}`)
+	// A positive integer equality can use the typed index and skip decoding
+	// entirely. This negated range stays on the evaluator for this comparison.
+	none := json.RawMessage(`{"not":{"field":{"id":"n","range":{"lower":{"type":"integer","value":0}}}}}`)
 	baseline, all := cost(none, 0), cost(nil, records)
 	perRow := (all - baseline) / float64(records)
 	// Re-deriving it per row cost something like eighty allocations a row;

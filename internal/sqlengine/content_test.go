@@ -23,6 +23,12 @@ func contentMap(t *testing.T, value any, err error) map[string]any {
 	return value.(map[string]any)
 }
 func TestContentImportAttachmentAndRetirement(t *testing.T) {
+	for _, mode := range []string{"shared", "managed"} {
+		t.Run(mode, func(t *testing.T) { checkContentAttachmentRetirement(t, mode == "managed") })
+	}
+}
+
+func checkContentAttachmentRetirement(t *testing.T, typed bool) {
 	s, _, dataset := fixture(t)
 	if err := s.EnableContent(t.Context(), filepath.Join(t.TempDir(), "bytes")); err != nil {
 		t.Fatal(err)
@@ -64,6 +70,11 @@ func TestContentImportAttachmentAndRetirement(t *testing.T) {
 		return e
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if typed {
+		if err := s.InstallManagedTypes(t.Context(), owner, dataset, []string{"test.media"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ref, _ := p.NewValue(p.MediaType, contentID+"//"+item)
 	var object string
@@ -117,7 +128,6 @@ func TestContentImportAttachmentAndRetirement(t *testing.T) {
 	if err = s.CleanupContent(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	_ = dataset
 }
 
 func TestContentStreamingLimitsAndAtomicAttachmentFailure(t *testing.T) {

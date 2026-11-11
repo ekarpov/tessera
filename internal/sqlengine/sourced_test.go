@@ -14,7 +14,7 @@ import (
 // snapshot is everything a write can change in one dataset, as stored.
 func snapshot(t *testing.T, s *Store, dataset string) (rows string, next, watermark string) {
 	t.Helper()
-	result, err := s.db.QueryContext(t.Context(), `SELECT "object_id","type_id","fields" FROM "tessera_objects" WHERE "dataset_id"=$1 ORDER BY "object_id"`, dataset)
+	result, err := s.db.QueryContext(t.Context(), `SELECT "object_id","type_id","fields" FROM "tessera_read_objects" WHERE "dataset_id"=$1 ORDER BY "object_id"`, dataset)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func counted(t *testing.T, s *Store, dataset string) {
 	if err := s.db.QueryRowContext(t.Context(), `SELECT "object_count","object_bytes" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&keptRows, &keptBytes); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.QueryRowContext(t.Context(), `SELECT count(*),coalesce(sum(length("fields")),0) FROM "tessera_objects" WHERE "dataset_id"=$1`, dataset).Scan(&rows, &size); err != nil {
+	if err := s.db.QueryRowContext(t.Context(), `SELECT count(*),coalesce(sum("wire_bytes"),0) FROM "tessera_read_objects" WHERE "dataset_id"=$1`, dataset).Scan(&rows, &size); err != nil {
 		t.Fatal(err)
 	}
 	if keptRows != rows || keptBytes != size {
