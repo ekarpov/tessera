@@ -570,16 +570,9 @@ func (s *Store) persistManagedRecord(ctx context.Context, tx *sql.Tx, dataset, i
 			oldNumber, oldData := fieldParts(old)
 			number, data := fieldParts(value)
 			changed = changed || old.Type() != value.Type() || oldNumber != number || !bytes.Equal(oldData, data)
-			var arg any = number
-			if data != nil {
-				arg = data
-				if s.postgres && field.Kind == p.DateTimeType {
-					stamp, err := time.Parse(time.RFC3339Nano, string(data))
-					if err != nil {
-						return store.Refuse("internal_error")
-					}
-					arg = stamp
-				}
+			arg, err := s.managedFieldArgument(field.Kind, number, data)
+			if err != nil {
+				return err
 			}
 			column := managedColumn(i)
 			columns = append(columns, column)
@@ -600,6 +593,22 @@ func (s *Store) persistManagedRecord(ctx context.Context, tx *sql.Tx, dataset, i
 		}
 	}
 	return persistTypedFields(ctx, tx, dataset, id, oldCustom, newCustom)
+}
+
+// PostgreSQL stores managed dates as timestamps. Other managed values use
+// the same representation as the shared field table.
+func (s *Store) managedFieldArgument(kind p.Type, number any, data []byte) (any, error) {
+	if data == nil {
+		return number, nil
+	}
+	if s.postgres && kind == p.DateTimeType {
+		stamp, err := time.Parse(time.RFC3339Nano, string(data))
+		if err != nil {
+			return nil, store.Refuse("internal_error")
+		}
+		return stamp, nil
+	}
+	return data, nil
 }
 
 // Resolve a field to a single physical column only when all concrete types
@@ -625,12 +634,16 @@ func (m managedMapping) field(types []string, id string, kind p.Type) (installed
 	return resolved, column, column != ""
 }
 
-// Archives flatten managed columns to typed rows. Rebuild the registered
-// tables and split their values back out before the restore is committed.
-func (s *Store) restoreManagedRows(ctx context.Context, tx *sql.Tx) error {
+// Rebuild the registered tables before restoring any managed values. Packed
+// archives can write values directly, while older archives have staged them
+// in the shared field table.
+func (s *Store) restoreManagedRows(ctx context.Context, tx *sql.Tx, objects backupTable, payloads [][]byte) error {
 	layouts, err := s.listManagedLayouts(ctx, tx)
-	if err != nil || len(layouts) == 0 {
+	if err != nil {
 		return err
+	}
+	if len(layouts) == 0 {
+		return s.restorePackedFields(ctx, tx, objects, payloads, nil)
 	}
 	if len(layouts) > maxManagedLayouts {
 		return store.Refuse("invalid_field")
@@ -660,6 +673,7 @@ func (s *Store) restoreManagedRows(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return dbError(ctx, err)
 	}
+	mappings := make(map[string]managedMapping, len(ids))
 	for _, dataset := range ids {
 		types, err := restoreDeclaredTypes(ctx, tx, dataset)
 		if err != nil {
@@ -676,9 +690,14 @@ func (s *Store) restoreManagedRows(ctx context.Context, tx *sql.Tx) error {
 		if err != nil {
 			return err
 		}
-		if err = s.restoreManagedDataset(ctx, tx, dataset, mapping.mapping); err != nil {
+		if objects.Name != "" {
+			mappings[dataset] = mapping.mapping
+		} else if err = s.restoreManagedDataset(ctx, tx, dataset, mapping.mapping); err != nil {
 			return err
 		}
+	}
+	if err = s.restorePackedFields(ctx, tx, objects, payloads, mappings); err != nil {
+		return err
 	}
 	return s.refreshManagedViews(ctx, tx)
 }

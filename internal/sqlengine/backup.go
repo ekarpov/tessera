@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -549,6 +548,13 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			return dbError(ctx, err)
 		}
 	}
+	var packedObjects backupTable
+	var packedPayloads [][]byte
+	// Packed archives carry the values with their objects and have an empty
+	// field table. Older archives can mix packed and flattened values.
+	packed := len(manifest.Tables) == len(backupTables) &&
+		len(manifest.Tables[slices.Index(backupTables, "tessera_field_values")].Rows) == 0
+
 	for i, table := range manifest.Tables {
 		if table.Name != backupTables[i] {
 			return store.Refuse("invalid_field")
@@ -558,6 +564,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		case "tessera_dataset":
 			stripBackupColumn(&table, "typed_fields")
 		case "tessera_objects":
+			packed = packed && slices.Contains(table.Columns, "fields") && !slices.Contains(table.Columns, "wire_bytes")
 			legacyPayloads, err = normalizeObjectArchive(&table)
 			if err != nil {
 				return err
@@ -627,11 +634,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		if err != nil || strings.Join(columns, "\x00") != strings.Join(table.Columns, "\x00") {
 			return store.Refuse("invalid_field")
 		}
-		parameters := make([]string, len(columns))
-		for i := range parameters {
-			parameters[i] = "$" + strconv.Itoa(i+1)
-		}
-		marks := strings.Join(parameters, ",")
+		insert := restoreInsert{prefix: `INSERT INTO "` + table.Name + `" VALUES `}
+		datasetColumn, objectColumn := slices.Index(columns, "dataset_id"), slices.Index(columns, "object_id")
 		for index, row := range table.Rows {
 			if len(row) != len(columns) {
 				return store.Refuse("invalid_field")
@@ -651,12 +655,15 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 					return store.Refuse("invalid_field")
 				}
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO "`+table.Name+`" VALUES (`+marks+`)`, values...); err != nil {
-				return dbError(ctx, err)
+			if err = insert.add(ctx, tx, values); err != nil {
+				return err
 			}
-			if len(legacyPayloads) != 0 && legacyPayloads[index] != nil {
-				dataset, datasetOK := values[slices.Index(columns, "dataset_id")].(*string)
-				id, idOK := values[slices.Index(columns, "object_id")].(*string)
+			if !packed && len(legacyPayloads) != 0 && legacyPayloads[index] != nil {
+				if err = insert.flush(ctx, tx); err != nil {
+					return err
+				}
+				dataset, datasetOK := values[datasetColumn].(*string)
+				id, idOK := values[objectColumn].(*string)
 				if !datasetOK || !idOK || dataset == nil || id == nil {
 					return store.Refuse("invalid_field")
 				}
@@ -665,6 +672,13 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				}
 			}
 		}
+		if err = insert.flush(ctx, tx); err != nil {
+			return err
+		}
+		if packed && table.Name == "tessera_objects" {
+			packedObjects, packedPayloads = table, legacyPayloads
+		}
+
 	}
 	// A restored copy is a distinct storage and every dataset in it gets its own
 	// fresh version secret: sharing one across the copy would let a watermark
@@ -680,7 +694,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// A dataset's record count and size are worked out from the records the
 	// archive holds rather than trusted from it: they are derived, and an
 	// archive from before they were kept has none.
-	if err = s.restoreManagedRows(ctx, tx); err != nil {
+	if err = s.restoreManagedRows(ctx, tx, packedObjects, packedPayloads); err != nil {
 		return err
 	}
 	if err = recount(ctx, tx); err != nil {
