@@ -3,7 +3,10 @@ package sqlengine
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/ekarpov/tessera/internal/dbtest"
@@ -129,16 +132,43 @@ func TestContributionInventoryAndErasure(t *testing.T) {
 			if err = restore(ctx, before, filepath.Join(dir, "refused.db")); p.ErrorCode(err) != "dataset_unavailable" {
 				t.Fatal("pre-erasure archive was accepted", err)
 			}
-			if backend == "sqlite" {
-				after := filepath.Join(dir, "after.tessera")
-				if err = s.Backup(ctx, after, key); err != nil {
+			after := filepath.Join(dir, "after.tessera")
+			if err = s.Backup(ctx, after, key); err != nil {
+				t.Fatal(err)
+			}
+			reopenRestored := func(archive, path string) (*Store, error) {
+				if err := restore(ctx, archive, path); err != nil {
+					return nil, err
+				}
+				return Open(ctx, path, p.DevelopmentLimits())
+			}
+			if backend == "postgres" {
+				dsn := dbtest.PostgresRestore(t)
+				if dsn == "" {
+					return
+				}
+				admin, err := sql.Open("tessera-postgres", dsn)
+				if err != nil {
 					t.Fatal(err)
 				}
-				path := filepath.Join(dir, "restored.db")
-				if err = restore(ctx, after, path); err != nil {
-					t.Fatal(err)
+				defer admin.Close()
+				reset := func() {
+					if _, err := admin.ExecContext(ctx, `DO $$ DECLARE t record; BEGIN FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'tessera\_%' LOOP EXECUTE format('DROP TABLE IF EXISTS %I CASCADE', t.tablename); END LOOP; END $$`); err != nil {
+						t.Fatal(err)
+					}
 				}
-				restored, err := Open(ctx, path, p.DevelopmentLimits())
+				reset()
+				defer reset()
+				reopenRestored = func(archive, path string) (*Store, error) {
+					if err := RestorePostgres(ctx, archive, dsn, path, "", s.path+".retired", key); err != nil {
+						return nil, err
+					}
+					return OpenPostgres(ctx, dsn, path, p.DevelopmentLimits())
+				}
+			}
+			checkRestore := func(archive, path string) {
+				t.Helper()
+				restored, err := reopenRestored(archive, path)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -149,6 +179,29 @@ func TestContributionInventoryAndErasure(t *testing.T) {
 				if rows, _, err := restored.Contributions(ctx, dataset, owner.Principal, "", 2); err != nil || len(rows) != 1 || rows[0].ObjectID != ids[2] {
 					t.Fatal(rows, err)
 				}
+			}
+			checkRestore(after, filepath.Join(dir, "restored.db"))
+			if backend == "sqlite" {
+				flat := filepath.Join(dir, "flat.tessera")
+				rewriteArchive(t, after, flat, key, func(m *backupManifest) {
+					for i := range m.Tables {
+						table := &m.Tables[i]
+						if table.Name != "tessera_contributions" {
+							continue
+						}
+						if !slices.Equal(table.Columns, []string{"dataset_id", "creator_id", "object_ids"}) || len(table.Rows) != 1 {
+							t.Fatal("expected a packed contribution group")
+						}
+						group := table.Rows[0]
+						var objectIDs []string
+						if json.Unmarshal([]byte(*group[2].Text), &objectIDs) != nil || len(objectIDs) != 1 {
+							t.Fatal("packed contribution is missing its object")
+						}
+						table.Columns = []string{"dataset_id", "object_id", "creator_id"}
+						table.Rows = [][]backupValue{{group[0], {Kind: "text", Text: &objectIDs[0]}, group[1]}}
+					}
+				})
+				checkRestore(flat, filepath.Join(dir, "flat.db"))
 			}
 		})
 	}

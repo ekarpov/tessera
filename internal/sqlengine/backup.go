@@ -253,6 +253,15 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			if s.postgres {
 				query = `SELECT "object_id","type_id","dataset_id","fields" FROM "tessera_read_objects"`
 			}
+		case "tessera_contributions":
+			// The index repeats its dataset and creator for each record. Pack
+			// the object IDs together to avoid materializing that repetition.
+			aggregate := `json_group_array("object_id")`
+			if s.postgres {
+				aggregate = `json_agg("object_id")::text`
+			}
+			query = `SELECT "dataset_id","creator_id",` + aggregate +
+				` AS "object_ids" FROM "tessera_contributions" GROUP BY "dataset_id","creator_id"`
 		case "tessera_field_values":
 			// Retain the archive table inventory. All values now travel with the
 			// object payload, including the managed columns.
@@ -268,12 +277,12 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			return dbError(ctx, e)
 		}
 		table := backupTable{Name: name, Columns: columns}
+		values := make([]any, len(columns))
+		targets := make([]any, len(values))
+		for i := range values {
+			targets[i] = &values[i]
+		}
 		for rows.Next() {
-			values := make([]any, len(columns))
-			targets := make([]any, len(values))
-			for i := range values {
-				targets[i] = &values[i]
-			}
 			if e = rows.Scan(targets...); e != nil {
 				break
 			}
@@ -296,7 +305,8 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 				case nil:
 					row[i].Kind = "null"
 				case []byte:
-					row[i] = backupValue{Kind: "bytes", Bytes: append([]byte(nil), v...)}
+					// Scan into *any returns an owned copy of driver bytes.
+					row[i] = backupValue{Kind: "bytes", Bytes: v}
 					total += len(v)
 				case string:
 					copy := v
@@ -581,6 +591,13 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				}
 				table.Columns = append(slices.Delete(table.Columns, index, index+1), "schema_cache_key", "managed_key", "creator_secret")
 			}
+		case "tessera_contributions":
+			if slices.Equal(table.Columns, []string{"dataset_id", "creator_id", "object_ids"}) {
+				if err = s.restorePackedContributions(ctx, tx, table); err != nil {
+					return err
+				}
+				continue
+			}
 		case "tessera_objects":
 			packed = packed && slices.Contains(table.Columns, "fields") && !slices.Contains(table.Columns, "wire_bytes")
 			legacyPayloads, err = normalizeObjectArchive(&table)
@@ -664,7 +681,11 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				case "null":
 				case "bytes":
 					// Preserve an empty binary value even when the archive omitted its bytes.
-					values[j] = append([]byte{}, value.Bytes...)
+					body := value.Bytes
+					if body == nil {
+						body = []byte{}
+					}
+					values[j] = body
 				case "text":
 					values[j] = value.Text
 				case "integer":
