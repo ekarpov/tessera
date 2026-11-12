@@ -35,8 +35,8 @@ membership without returning a row.
   engines.
 - **Cursors bind to the principal, that principal's application authorization, and the view's
   generation** — two installations of one person may see different data. The generation changes
-  when effective grants or application authorization change, including expiry. Record fields never
-  determine v1 visibility, so ordinary field writes do not change this generation. The
+  when effective grants or application authorization change, including expiry. Ordinary updates
+  leave collection membership fixed and do not change this generation. The
   generation is re-checked before every page, replays included, and a stale cursor is
   `410 view_changed`. This is why the replay guarantee in the pagination contract is bounded by cursor
   validity rather than promised indefinitely.
@@ -54,11 +54,12 @@ before it is worth anything, which is what the rest of this section is for.
 
 The core checks current dataset and application authority in the transaction performing the write.
 Authorization and the write MUST observe the same snapshot: concurrent revocation either precedes the
-decision or follows the write, never lands between them. v1 guests are read-only, and visibility comes
-only from the grant table. A type grant covers its exact concrete type, never later subtypes.
+decision or follows the write. Guest grants can authorize reads and inserts within their scope.
+Type and collection grants cover exact concrete types. Collection reads also check the membership
+fixed at insertion.
 
-The proposed existing/proposed-state write hook is abandoned for v1. There is no field-dependent
-policy, approval transition or guest-write hook to implement. A host needing domain workflow defines
+The proposed existing/proposed-state write hook is abandoned for v1. Collection membership is the only field-based authorization rule. Workflow transitions and
+arbitrary guest-write hooks remain outside the protocol. A host needing domain workflow defines
 its own extension contract outside v1; embedding alone does not promise such a mechanism.
 
 ### 3. A unit of work the host can join

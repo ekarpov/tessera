@@ -32,7 +32,7 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	call := func(method, path, token string, body any, status int, dest any) error {
+	callWithHeaders := func(method, path, token string, body any, headers map[string]string, status int, dest any) error {
 		var payload []byte
 		if body != nil {
 			var err error
@@ -49,6 +49,9 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
 		res, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("collection fixture request failed")
@@ -61,6 +64,9 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 			return fmt.Errorf("invalid collection fixture response")
 		}
 		return nil
+	}
+	call := func(method, path, token string, body any, status int, dest any) error {
+		return callWithHeaders(method, path, token, body, nil, status, dest)
 	}
 	problem := func(method, path, token string, body any, status int, code string) error {
 		var result struct{ Error p.Error }
@@ -274,6 +280,48 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 	}
 	if err = problem("GET", objects+"/"+url.PathEscape(combined), reader, nil, 404, "unavailable"); err != nil {
 		return err
+	}
+	if _, err = f.Set(ctx, "reader", alpha, alpha, nil); err != nil {
+		return err
+	}
+	operation := "53c49d33-8f35-439e-836b-" + hex.EncodeToString(nonce[:6])
+	request := map[string]any{"fields": fields("alpha", 40)}
+	headers := map[string]string{"Idempotency-Key": operation}
+	var original json.RawMessage
+	if err = callWithHeaders("POST", objects, reader, request, headers, 201, &original); err != nil {
+		return err
+	}
+	var response struct {
+		Objects []p.Identity
+	}
+	if json.Unmarshal(original, &response) != nil || len(response.Objects) != 1 {
+		return fmt.Errorf("a keyed collection insert returned no identity")
+	}
+	status := base + "/operations/" + operation + ":status"
+	var receipt store.Receipt
+	if err = call("POST", status, reader, nil, 200, &receipt); err != nil {
+		return err
+	}
+	if receipt.ResultWithheld || !bytes.Equal(receipt.Result, original) {
+		return fmt.Errorf("collection recovery withheld a currently readable representation")
+	}
+	var replayed json.RawMessage
+	if err = callWithHeaders("POST", objects, reader, request, headers, 201, &replayed); err != nil {
+		return err
+	}
+	if !bytes.Equal(replayed, original) {
+		return fmt.Errorf("collection replay changed the original result")
+	}
+	if _, err = f.Set(ctx, "reader", beta, alpha, nil); err != nil {
+		return err
+	}
+	receipt = store.Receipt{}
+	if err = call("POST", status, reader, nil, 200, &receipt); err != nil {
+		return err
+	}
+	if !receipt.ResultWithheld || len(receipt.Result) != 0 || len(receipt.Objects) != 1 ||
+		receipt.Objects[0].ObjectID != response.Objects[0].ID {
+		return fmt.Errorf("collection recovery disclosed a withdrawn representation or lost its identity")
 	}
 	expired := time.Now().Add(-time.Minute)
 	if _, err = f.Set(ctx, "reader", beta, nil, &expired); err != nil {
