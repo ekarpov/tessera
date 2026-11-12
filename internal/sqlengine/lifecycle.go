@@ -231,7 +231,8 @@ func (s *Store) CheckpointCleanup(ctx context.Context) error {
 func (s *Store) journalRetirements(ctx context.Context) error {
 	s.journalMu.Lock()
 	defer s.journalMu.Unlock()
-	rows, err := s.db.QueryContext(ctx, `SELECT "dataset_id","journaled" FROM "tessera_retirements"`)
+	rows, err := s.db.QueryContext(ctx, `SELECT "dataset_id","journaled" FROM "tessera_retirements"
+ UNION ALL SELECT 'contribution:' || "dataset_id" || ':' || "job_id",1 FROM "tessera_contribution_erasure"`)
 	if err != nil {
 		return dbError(ctx, err)
 	}
@@ -324,6 +325,22 @@ func (s *Store) checkRestoreFence(ctx context.Context) error {
 		var retired string
 		if json.Unmarshal(scan.Bytes(), &retired) != nil {
 			return store.Refuse("dataset_unavailable")
+		}
+		if dataset, job, ok := splitContributionFence(retired); ok {
+			if dataset == "" || job == "" {
+				return store.Refuse("dataset_unavailable")
+			}
+			var missing int
+			err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_dataset" d WHERE d."dataset_id"=$1
+              AND NOT EXISTS (SELECT 1 FROM "tessera_contribution_erasure" e WHERE e."dataset_id"=$1 AND e."job_id"=$2)`,
+				dataset, job).Scan(&missing)
+			if err != nil {
+				return dbError(ctx, err)
+			}
+			if missing != 0 {
+				return store.Refuse("dataset_unavailable")
+			}
+			continue
 		}
 		// A retired identity that still names a live dataset or an active content
 		// store means the database predates the retirement it was restored past.

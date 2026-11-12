@@ -104,3 +104,6 @@ var SQLiteCreatorUpgrade string
 
 //go:embed 017_postgres.sql
 var PostgresCreatorUpgrade string
+
+//go:embed contribution_upgrade.sql
+var ContributionUpgrade string

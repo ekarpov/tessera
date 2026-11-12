@@ -256,6 +256,11 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 		if err = s.persistManagedRecord(ctx, tx, dataset, id, managed[row.TypeID], old.Fields, row.Fields, ok); err != nil {
 			return err
 		}
+		if creator := after.NewContributions[id]; !ok && creator != "" {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_contributions" ("dataset_id","object_id","creator_id") VALUES ($1,$2,$3)`, dataset, id, creator); err != nil {
+				return dbError(ctx, err)
+			}
+		}
 	}
 	for id := range before.Objects {
 		if _, ok := after.Objects[id]; !ok {

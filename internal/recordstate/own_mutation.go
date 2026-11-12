@@ -1,13 +1,44 @@
 package recordstate
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	p "github.com/ekarpov/tessera/pkg/protocol"
 	"github.com/ekarpov/tessera/pkg/store"
 )
 
 func (t *transaction) creatorID() string {
-	digest := t.engine.digest(&t.engine.creatorSecret, "record_creator", []byte(t.principal))
-	return digest[2 : 2+p.CreatorIDBytes]
+	return CreatorID(t.engine.creatorSecret[:], t.engine.id, t.principal)
+}
+
+// CreatorID derives the same dataset-local stamp for trusted storage operations.
+func CreatorID(secret []byte, dataset, principal string) string {
+	h := hmac.New(sha256.New, secret)
+	h.Write([]byte("record_creator\x00"))
+	h.Write([]byte(dataset))
+	h.Write([]byte{0})
+	h.Write([]byte(principal))
+	return hex.EncodeToString(h.Sum(nil)[:p.CreatorIDBytes/2])
+}
+
+func CreatorField(types map[string]p.Meta, typeID string) string {
+	for range len(types) {
+		meta, ok := types[typeID]
+		if !ok {
+			return ""
+		}
+		for _, field := range meta.Fields {
+			if field.Creator {
+				return field.ID
+			}
+		}
+		if meta.ParentID == nil {
+			return ""
+		}
+		typeID = *meta.ParentID
+	}
+	return ""
 }
 
 func (t *transaction) canMutateOwn(remove bool) bool {

@@ -24,7 +24,9 @@ import (
 
 const maxBackupBytes = 256 << 20
 
-var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations"}
+var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations", "tessera_contributions", "tessera_contribution_erasure"}
+
+const packedArchiveTables = 14
 
 type backupValue struct {
 	Bytes   []byte  `json:"bytes,omitempty"`
@@ -478,12 +480,15 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			}
 		}
 	}
-	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-2 && len(manifest.Tables) != len(backupTables)-3) {
+	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != packedArchiveTables && len(manifest.Tables) != packedArchiveTables-2 && len(manifest.Tables) != packedArchiveTables-3) {
 		return store.Refuse("invalid_field")
 	}
 	fence, err := os.ReadFile(fencePath)
 	if err != nil {
 		return store.Refuse("dataset_unavailable")
+	}
+	if err = checkContributionArchive(manifest, fence); err != nil {
+		return err
 	}
 	erasedDatasets, erasedStores, err := retiredInBackup(manifest, fence)
 	if err != nil {
@@ -552,7 +557,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	var packedPayloads [][]byte
 	// Packed archives carry the values with their objects and have an empty
 	// field table. Older archives can mix packed and flattened values.
-	packed := len(manifest.Tables) == len(backupTables) &&
+	packed := len(manifest.Tables) >= packedArchiveTables &&
 		len(manifest.Tables[slices.Index(backupTables, "tessera_field_values")].Rows) == 0
 
 	for i, table := range manifest.Tables {
@@ -710,6 +715,11 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// archive from before they were kept has none.
 	if err = s.restoreManagedRows(ctx, tx, packedObjects, packedPayloads); err != nil {
 		return err
+	}
+	if len(manifest.Tables) < len(backupTables) {
+		if err = s.backfillContributions(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err = recount(ctx, tx); err != nil {
 		return err

@@ -4,19 +4,21 @@ import (
 	"context"
 	p "github.com/ekarpov/tessera/pkg/protocol"
 	"github.com/ekarpov/tessera/pkg/store"
+	"maps"
 	"strconv"
 )
 
 // Image is trusted engine state, never an HTTP model. Secret and CreatorSecret
 // must stay out of responses and diagnostics.
 type Image struct {
-	ID            string
-	Secret        [32]byte
-	CreatorSecret [32]byte
-	Next          uint64
-	Watermark     string
-	Types         map[string]p.Meta
-	Objects       map[string]Row
+	ID               string
+	Secret           [32]byte
+	CreatorSecret    [32]byte
+	Next             uint64
+	Watermark        string
+	Types            map[string]p.Meta
+	Objects          map[string]Row
+	NewContributions map[string]string
 }
 type Row struct {
 	// Sequence comes from the minted engine identity, not a request parameter.
@@ -88,6 +90,7 @@ func (s *Store) Image(ctx context.Context) (Image, error) {
 	}
 	defer s.release()
 	image := Image{ID: s.id, Secret: s.secret, CreatorSecret: s.creatorSecret, Next: s.state.next, Watermark: s.state.watermark, Types: map[string]p.Meta{}, Objects: map[string]Row{}}
+	image.NewContributions = maps.Clone(s.state.newContributions)
 	for id, m := range s.state.types {
 		image.Types[id] = cloneMeta(m)
 	}

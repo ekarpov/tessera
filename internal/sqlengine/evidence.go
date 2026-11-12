@@ -39,7 +39,8 @@ func (s *Store) captureRetirementEvidence(ctx context.Context) ([]byte, string, 
 		return nil, "", dbError(ctx, err)
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT "dataset_id" FROM "tessera_retirements"`)
+	rows, err := tx.QueryContext(ctx, `SELECT "dataset_id" FROM "tessera_retirements"
+ UNION ALL SELECT 'contribution:' || "dataset_id" || ':' || "job_id" FROM "tessera_contribution_erasure"`)
 	if err != nil {
 		return nil, "", dbError(ctx, err)
 	}

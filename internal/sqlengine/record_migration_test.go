@@ -98,6 +98,11 @@ func TestCreatorStorageUpgrade(t *testing.T) {
 				return record(t, engine, dataset, identity(t, reply)).Records[0]
 			}
 			first := insert(s)
+			for _, statement := range []string{`DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`} {
+				if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if version == "creator-only" {
 				creator = first.Values[1].Payload()
 				demoteRecordColumns(t, s, legacyRecordPayloads(t, s))
@@ -125,6 +130,12 @@ func TestCreatorStorageUpgrade(t *testing.T) {
 			}
 			if version == "creator-only" && (carried.Values[1].Payload() != creator || insert(upgraded).Values[1].Payload() != creator) {
 				t.Fatal("migration did not preserve creator attribution")
+			}
+			if version == "creator-only" {
+				rows, _, err := upgraded.Contributions(t.Context(), dataset, owner.Principal, "", 10)
+				if err != nil || len(rows) != 2 || rows[0].ObjectID != first.ID.ID {
+					t.Fatal("migration did not backfill contributions", rows, err)
+				}
 			}
 		})
 	}

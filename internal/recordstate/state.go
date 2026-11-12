@@ -29,6 +29,8 @@ type state struct {
 	objects   map[string]object
 	next      uint64
 	watermark string
+	// Insert-time stamps are consumed by the durable writer for this transaction.
+	newContributions map[string]string
 }
 type Store struct {
 	lock chan struct{}
@@ -885,6 +887,12 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 	}
 	o := object{t.state.next - 1, typeID, converted}
 	t.state.objects[id] = o
+	if field := CreatorField(t.state.types, typeID); field != "" {
+		if t.state.newContributions == nil {
+			t.state.newContributions = map[string]string{}
+		}
+		t.state.newContributions[id] = converted[field].Payload().(string)
+	}
 	if t.originals != nil {
 		if t.inserted == nil {
 			t.inserted = map[string]bool{}

@@ -214,7 +214,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 18 && version != 19 && version != 20 && version != 21 {
+	} else if version != 18 && version != 19 && version != 20 && version != 21 && version != 22 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version != 0 && version < 19 {
@@ -227,8 +227,14 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 			}
 		}
 	}
-	if version != 0 && version < 21 {
-		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 21`); err != nil {
+	if version != 0 && version < 22 {
+		if _, err = tx.ExecContext(ctx, migrations.ContributionUpgrade); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.backfillContributions(ctx, tx); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 22`); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}
@@ -349,6 +355,17 @@ func (s *Store) SetAuthorization(ctx context.Context, dataset string, a store.Ac
 	}
 	if live == 0 {
 		return store.Refuse("not_found")
+	}
+	creator, err := contributionCreator(ctx, tx, dataset, a.Principal)
+	if err != nil {
+		return err
+	}
+	var erased int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_contribution_erasure" WHERE "dataset_id"=$1 AND "creator_id"=$2`, dataset, creator).Scan(&erased); err != nil {
+		return dbError(ctx, err)
+	}
+	if erased != 0 {
+		return store.Refuse("permission_denied")
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_access" ("dataset_id","principal","authorization","grants","generation","view") VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT ("dataset_id","principal","authorization") DO UPDATE SET "grants"=excluded."grants","generation"=excluded."generation","view"=excluded."view"`, dataset, a.Principal, a.Authorization, raw, generation, view)
 	if err != nil {

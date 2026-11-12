@@ -25,10 +25,21 @@ The embedding host sets separate exact type and collection pairs through
 stamp on every explicit update or delete. Changes use the ordinary transaction
 and receipt paths.
 
-## Principal-wide cleanup
+## Contribution inventory and erasure
 
-A separate host operation is planned for enumerating and erasing a principal's
-stamped contributions across datasets. That slice needs a bounded storage scan,
-a plan for concurrent inserts and revocation, and rules for retained receipts,
-content and restored backups. The host coordinates account-wide cleanup and owns
-any placeholders it retains.
+A trusted embedding host can page live attributed record identities with
+`Contributions(ctx, dataset, principal, after, limit)`. Each call sees the live
+index and returns a position for the next page. An insert's creator stamp stays
+indexed if a schema change later removes the visible creator field. Upgrades
+recover existing stamps that are still present in storage.
+
+`BeginContributionErasure` revokes the principal's authorizations and receipts
+in that dataset and returns a stable job ID. `StepContributionErasure` deletes
+bounded batches and can resume across restarts. Batches remove record links and
+retained page snapshots, and mark attachments with no surviving references for
+the existing content cleanup. The erasure fence requires an archive taken
+after the job completes before that dataset can be restored. Keep the current
+fence independently of the archive.
+
+The host runs this operation for each dataset in scope, handles account
+identity and cross-service coordination, and owns any placeholders it retains.
