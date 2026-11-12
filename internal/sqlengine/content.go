@@ -408,13 +408,8 @@ func (s *Store) contentItem(ctx context.Context, tx *sql.Tx, a store.Access, aut
 		return nil, store.Refuse("permission_denied")
 	}
 	if !auth.View.Full() {
-		// Constrained to the dataset the store belongs to. A record in another
-		// dataset may hold a reference to this item — the reference names a
-		// store and an item, and nothing stops one crossing — and without this
-		// the row it writes here was read as if it were one of this dataset's
-		// own. A share of one dataset then let its type allowance be applied
-		// to an object in a dataset the reader cannot reach at all, which
-		// turned somebody else's record into a key to these bytes.
+		// Legacy links may cross datasets. Check the attachment's dataset
+		// before applying a grant on its type or object identity.
 		query := `SELECT a."object_id",a."type_id" FROM "tessera_attachments" a`
 		var types map[string]p.Meta
 		if auth.View.HasCollectionReads() {

@@ -631,14 +631,8 @@ func TestASlowUploadDoesNotStopEveryOtherTransfer(t *testing.T) {
 	}
 }
 
-// A media reference names a store and an item, and nothing stops one crossing
-// a dataset boundary: a record in B may reference an item in A's store. The
-// attachment rows that record writes are B's, and the visibility check read
-// them without asking whose they were — so a reader sharing a type in A had
-// that allowance applied to an object in B, and the bytes came back.
-//
-// Reported by review. My own first attempt put the item in B's store, which
-// fails earlier and proves nothing about this.
+// A legacy link in one dataset must not grant read access to someone who
+// shares the same type in the item's dataset.
 func TestAShareOfOneDatasetIsNotAKeyToAnothersReferences(t *testing.T) {
 	s, storeA, datasetA := contentFixture(t)
 	other := store.Access{Principal: "other", Authorization: "other"}
@@ -647,8 +641,6 @@ func TestAShareOfOneDatasetIsNotAKeyToAnothersReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	datasetB := made.DatasetID
-	// The writer legitimately holds both: crossing the boundary on the way in
-	// requires write and a full view of the store's dataset.
 	if err = s.SetAuthorization(t.Context(), datasetA, other,
 		store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true}, View: store.FullView()}); err != nil {
 		t.Fatal(err)
@@ -666,15 +658,22 @@ func TestAShareOfOneDatasetIsNotAKeyToAnothersReferences(t *testing.T) {
 	value, err = s.ContentControl(t.Context(), owner, "commit", storeA, upload, nil)
 	item := contentMap(t, value, err)["item_id"].(string)
 
-	// Referenced only from B. A holds no record referring to it at all.
-	ref, _ := p.NewValue(p.MediaType, storeA+"//"+item)
+	// Seed the legacy index row after creating its record in B.
+	var objectID string
 	if err = s.Transact(t.Context(), other, datasetB, func(tx store.Tx) error {
 		if _, e := tx.CreateMetadata(p.Meta{ID: "test.media", Fields: []p.Field{{ID: "photo", MetaID: "test.media", Type: p.MediaType}}}); e != nil {
 			return e
 		}
-		_, e := tx.Insert("test.media", map[string]p.Value{"photo": ref})
+		record, e := tx.Insert("test.media", nil)
+		if e == nil {
+			objectID = record.Records[0].ID.ID
+		}
 		return e
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(t.Context(), `INSERT INTO "tessera_attachments" ("dataset_id","object_id","type_id","field_id","store_id","item_id")
+		VALUES ($1,$2,'test.media','photo',$3,$4)`, datasetB, objectID, storeA, item); err != nil {
 		t.Fatal(err)
 	}
 
