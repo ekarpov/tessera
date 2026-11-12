@@ -1039,7 +1039,8 @@ var archiveColumnFills = map[string]map[string]func() backupValue{
 		"creator_secret":   nullBackupValue,
 	},
 	"tessera_imports": {
-		"cleaned": zeroValue,
+		"cleaned":           zeroValue,
+		"attachment_target": nullBackupValue,
 	},
 }
 

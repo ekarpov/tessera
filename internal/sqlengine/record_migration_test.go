@@ -44,7 +44,7 @@ func legacyRecordPayloads(t *testing.T, s *Store) map[string]map[string][]byte {
 func demoteRecordColumns(t *testing.T, s *Store, payloads map[string]map[string][]byte) {
 	t.Helper()
 	for _, statement := range []string{
-		`DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`,
+		`ALTER TABLE "tessera_imports" DROP COLUMN "attachment_target"`, `DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`,
 		`DROP VIEW "tessera_read_objects"`,
 		`DROP VIEW "tessera_all_field_values"`,
 		`DROP TABLE "tessera_managed_installations"`,
@@ -106,7 +106,7 @@ func TestCreatorStorageUpgrade(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				for _, statement := range []string{`DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`, `ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`, `PRAGMA user_version=18`} {
+				for _, statement := range []string{`ALTER TABLE "tessera_imports" DROP COLUMN "attachment_target"`, `DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`, `ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`, `PRAGMA user_version=18`} {
 					if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
 						t.Fatal(err)
 					}

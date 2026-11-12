@@ -58,6 +58,9 @@ func (s *Store) BeginContributionErasure(ctx context.Context, dataset, principal
 			return "", dbError(ctx, err)
 		}
 	}
+	if err = eraseScopedUploads(ctx, tx, dataset, principal); err != nil {
+		return "", err
+	}
 	if err = tx.Commit(); err != nil {
 		return "", dbError(ctx, err)
 	}

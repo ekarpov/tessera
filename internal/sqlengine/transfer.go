@@ -147,9 +147,11 @@ func (s *Store) ContentTransfer(ctx context.Context, token, method, rangeHeader 
 	}
 	defer unlockTransfer()
 	var state string
+	var owner store.Access
+	var target sql.NullString
 	var received, maximum, updated int64
 	var established sql.NullInt64
-	err = s.reader.QueryRowContext(ctx, `SELECT "state","received_bytes","maximum_bytes","total_bytes","updated_at" FROM "tessera_imports" WHERE "store_id"=$1 AND "upload_id"=$2`, storeID, resource).Scan(&state, &received, &maximum, &established, &updated)
+	err = s.reader.QueryRowContext(ctx, `SELECT "state","received_bytes","maximum_bytes","total_bytes","updated_at","principal","authorization","attachment_target" FROM "tessera_imports" WHERE "store_id"=$1 AND "upload_id"=$2`, storeID, resource).Scan(&state, &received, &maximum, &established, &updated, &owner.Principal, &owner.Authorization, &target)
 	if err == sql.ErrNoRows {
 		return result, store.Refuse("not_found")
 	}
@@ -174,6 +176,17 @@ func (s *Store) ContentTransfer(ctx context.Context, token, method, rangeHeader 
 	}
 	if start > received || start < received && end >= received {
 		return result, store.Refuse("conflict")
+	}
+	if target.Valid {
+		check, err := s.reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return result, dbError(ctx, err)
+		}
+		err = s.recheckScopedTransfer(ctx, check, storeID, owner, target.String, false)
+		_ = check.Rollback()
+		if err != nil {
+			return result, err
+		}
 	}
 	path := filepath.Join(s.contentDir, resource)
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
@@ -220,6 +233,11 @@ func (s *Store) ContentTransfer(ctx context.Context, token, method, rangeHeader 
 	}
 	if stillActive != 1 {
 		return result, store.Refuse("expired")
+	}
+	if target.Valid {
+		if err = s.recheckScopedTransfer(ctx, tx, storeID, owner, target.String, true); err != nil {
+			return result, err
+		}
 	}
 	finalTotal := established
 	if !finalTotal.Valid && total.Valid && completes {

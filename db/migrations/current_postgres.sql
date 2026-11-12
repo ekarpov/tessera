@@ -65,6 +65,7 @@ CREATE TABLE "tessera_imports" (
     "item_id" text,
     "updated_at" bigint NOT NULL,
     "cleaned" integer DEFAULT 0 NOT NULL,
+    "attachment_target" TEXT,
     CONSTRAINT "tessera_imports_pkey" PRIMARY KEY ("upload_id"),
     CONSTRAINT "tessera_imports_store_id_operation_id_key" UNIQUE ("store_id", "operation_id"),
     CONSTRAINT "tessera_imports_store_id_fkey" FOREIGN KEY ("store_id") REFERENCES "tessera_content_stores"("id")
@@ -246,4 +247,4 @@ CREATE TABLE "tessera_contribution_erasure" (
     PRIMARY KEY ("dataset_id","creator_id")
 );
 
-INSERT INTO "tessera_migration" ("version") VALUES (20);
+INSERT INTO "tessera_migration" ("version") VALUES (21);

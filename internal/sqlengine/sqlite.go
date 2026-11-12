@@ -214,7 +214,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 18 && version != 19 && version != 20 && version != 21 && version != 22 {
+	} else if version != 18 && version != 19 && version != 20 && version != 21 && version != 22 && version != 23 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version != 0 && version < 19 {
@@ -235,6 +235,14 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 			return nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 22`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version != 0 && version < 23 {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_imports" ADD COLUMN "attachment_target" TEXT`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 23`); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}
@@ -640,7 +648,9 @@ func (s *Store) read(ctx context.Context, a store.Access, dataset string, object
 		return err
 	}
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, tx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, tx, a, dataset, ref, target)
+		})
 	}
 	if !objects {
 		// Built without the records, so a request for one by identity reads
@@ -813,7 +823,9 @@ func (s *Store) evaluate(ctx context.Context, sqltx *sql.Tx, a store.Access, dat
 		return err
 	}
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, sqltx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, sqltx, a, dataset, ref, target)
+		})
 	}
 	if err = engine.Transact(ctx, a, dataset, func(tx store.Tx) error { return fn(tx, sqltx) }); err != nil {
 		return err
@@ -864,7 +876,9 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 	})
 	engine.EnableSourcedWrites()
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, sqltx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, sqltx, a, dataset, ref, target)
+		})
 	}
 	failed := engine.Transact(ctx, a, dataset, func(tx store.Tx) error { return fn(tx, sqltx) })
 	if engine.NeededImage() {

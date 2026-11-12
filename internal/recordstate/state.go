@@ -64,7 +64,7 @@ type Store struct {
 	state          state
 	secret         [32]byte
 	creatorSecret  [32]byte
-	mediaAuthority func(string) error
+	mediaAuthority func(string, p.AttachmentTarget) error
 	// sourcedWrites lets a write evaluate against records fetched one at a
 	// time through source rather than against the whole dataset. What it
 	// fetches is kept, with its original, so the caller can write back only
@@ -779,7 +779,7 @@ func (t *transaction) record(typeID, id string, o object, fields []string, inclu
 
 // convertDeclared fills creator fields on insert and reports which supplied
 // fields are immutable for updates.
-func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool) (map[string]p.Value, map[string]bool, error) {
+func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool, target p.AttachmentTarget, targetFields map[string]p.Value) (map[string]p.Value, map[string]bool, error) {
 	meta, err := t.effective(typeID)
 	if err != nil {
 		return nil, nil, err
@@ -816,9 +816,6 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 		}
 		kind := declared.Type
 		if kind == p.MediaType && v.Type() != p.NullType {
-			if !t.auth.Grants.Write && (!inserting || !t.auth.View.AllowsInsert(typeID)) {
-				return nil, nil, store.Refuse("permission_denied")
-			}
 			if t.engine.mediaAuthority == nil {
 				return nil, nil, store.Refuse("not_supported")
 			}
@@ -837,7 +834,10 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 			}
 		}
 		if converted.Type() == p.MediaType {
-			if err = t.engine.mediaAuthority(converted.Payload().(string)); err != nil {
+			if !t.auth.Grants.Write && target.CollectionID == "" {
+				target.CollectionID = CollectionID(t.state.types, typeID, targetFields)
+			}
+			if err = t.engine.mediaAuthority(converted.Payload().(string), target); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -868,7 +868,7 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 		t.auth.View.AllowsCollectionInsert(typeID, CollectionID(t.state.types, typeID, fields)))) {
 		return result, store.Refuse("permission_denied")
 	}
-	converted, _, err := t.convertDeclared(typeID, fields, true)
+	converted, _, err := t.convertDeclared(typeID, fields, true, p.AttachmentTarget{TypeID: typeID}, fields)
 	if err != nil {
 		return result, err
 	}
@@ -920,7 +920,7 @@ func (t *transaction) Update(typeID, id string, fields map[string]p.Value) (err 
 	if err != nil {
 		return err
 	}
-	converted, immutable, err := t.convertDeclared(typeID, fields, false)
+	converted, immutable, err := t.convertDeclared(typeID, fields, false, p.AttachmentTarget{TypeID: typeID, ObjectID: id}, o.fields)
 	if err != nil {
 		return err
 	}
@@ -1453,7 +1453,7 @@ func (t *transaction) ValidateFields(typeID string, fields map[string]p.Value) e
 	if err := t.check(t.auth.Grants.Write); err != nil {
 		return err
 	}
-	_, _, err := t.convertDeclared(typeID, fields, false)
+	_, _, err := t.convertDeclared(typeID, fields, false, p.AttachmentTarget{}, nil)
 	return err
 }
 
@@ -1492,7 +1492,9 @@ func (t *transaction) ExpectType(id, version string) (err error) {
 }
 
 // SetMediaAuthority installs a validator tied to the enclosing SQL transaction.
-func (s *Store) SetMediaAuthority(validate func(string) error) { s.mediaAuthority = validate }
+func (s *Store) SetMediaAuthority(validate func(string, p.AttachmentTarget) error) {
+	s.mediaAuthority = validate
+}
 
 // Provisioned names the datasets this evaluator holds, for composition. There
 // is always exactly one. It takes no access, because this is the call that

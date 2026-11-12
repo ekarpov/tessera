@@ -107,3 +107,10 @@ func (v View) WithCollectionRights(grants Grants) View {
 	}
 	return v
 }
+
+// AllowsScopedAttachmentUpload indicates that at least one target can be
+// requested. The upload still authorizes its concrete scope and record.
+func (v View) AllowsScopedAttachmentUpload(grants Grants) bool {
+	return (grants.Insert && len(v.insertCollections) != 0) ||
+		(grants.Read && grants.UpdateOwn && len(v.updateOwn) != 0)
+}

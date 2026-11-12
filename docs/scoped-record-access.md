@@ -25,6 +25,13 @@ The embedding host sets separate exact type and collection pairs through
 stamp on every explicit update or delete. Changes use the ordinary transaction
 and receipt paths.
 
+## Scoped attachments
+
+A contributor can upload to a granted collection insert or a readable record
+they have creator-scoped permission to update. The store binds the uploaded
+item to that target and to the authorization that uploaded it. See
+[scoped attachment writes](../specs/tessera-content-v1.md#scoped-attachment-writes).
+
 ## Contribution inventory and erasure
 
 A trusted embedding host can page live attributed record identities with

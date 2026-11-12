@@ -72,6 +72,7 @@ CREATE TABLE "tessera_imports" (
     "item_id" TEXT,
     "updated_at" BIGINT NOT NULL,
     "cleaned" INTEGER NOT NULL DEFAULT 0,
+    "attachment_target" TEXT,
     UNIQUE ("store_id","operation_id")
 );
 
@@ -209,4 +210,4 @@ CREATE TABLE "tessera_contribution_erasure" (
     PRIMARY KEY ("dataset_id","creator_id")
 );
 
-PRAGMA user_version = 22;
+PRAGMA user_version = 23;

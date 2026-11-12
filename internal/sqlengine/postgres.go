@@ -152,7 +152,7 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 16 && version != 17 && version != 18 && version != 19 && version != 20 {
+	} else if version != 16 && version != 17 && version != 18 && version != 19 && version != 20 && version != 21 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version != 0 && version < 17 {
@@ -173,6 +173,14 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 			return nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 20`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version != 0 && version < 21 {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_imports" ADD COLUMN "attachment_target" TEXT`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 21`); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}

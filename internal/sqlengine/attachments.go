@@ -3,6 +3,7 @@ package sqlengine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,22 +13,49 @@ import (
 	"github.com/ekarpov/tessera/pkg/store"
 )
 
-func (s *Store) authorizeAttachment(ctx context.Context, tx *sql.Tx, a store.Access, reference string) error {
+func (s *Store) authorizeAttachment(ctx context.Context, tx *sql.Tx, a store.Access, dataset, reference string, target p.AttachmentTarget) error {
 	storeID, itemID, err := p.ParseContentReference(reference)
 	if err != nil {
 		return err
 	}
-	auth, _, err := s.contentAuthority(ctx, tx, a, storeID)
+	auth, owning, err := s.contentAuthority(ctx, tx, a, storeID)
 	if err != nil {
 		return err
 	}
-	if !auth.Grants.Write || !auth.View.Full() {
-		return store.Refuse("permission_denied")
-	}
 	var one int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM "tessera_items" WHERE "store_id"=$1 AND "item_id"=$2 AND "deleted"=0`, storeID, itemID).Scan(&one)
-	if err == sql.ErrNoRows {
-		return store.Refuse("unavailable")
+	owner := auth.Grants.Write && auth.View.Full()
+	if owner && owning != dataset {
+		recordAuth, err := authorization(ctx, tx, dataset, a)
+		if err != nil {
+			return err
+		}
+		owner = recordAuth.Grants.Write && recordAuth.View.Full()
+	}
+	if owner {
+		err = tx.QueryRowContext(ctx, `SELECT 1 FROM "tessera_items" WHERE "store_id"=$1 AND "item_id"=$2 AND "deleted"=0`, storeID, itemID).Scan(&one)
+		if err == sql.ErrNoRows {
+			return store.Refuse("unavailable")
+		}
+	} else {
+		if owning != dataset || target.Validate() != nil ||
+			target.ObjectID == "" && (!auth.Grants.Insert || !auth.View.AllowsCollectionInsert(target.TypeID, target.CollectionID)) {
+			return store.Refuse("permission_denied")
+		}
+		var raw string
+		err = tx.QueryRowContext(ctx, `SELECT u."attachment_target" FROM "tessera_items" i
+		  JOIN "tessera_imports" u ON u."upload_id"=i."upload_id" AND u."store_id"=i."store_id"
+		  WHERE i."store_id"=$1 AND i."item_id"=$2 AND i."deleted"=0
+		    AND u."principal"=$3 AND u."authorization"=$4 AND u."attachment_target" IS NOT NULL`,
+			storeID, itemID, a.Principal, a.Authorization).Scan(&raw)
+		if err == sql.ErrNoRows {
+			return store.Refuse("permission_denied")
+		}
+		if err == nil {
+			var actual p.AttachmentTarget
+			if json.Unmarshal([]byte(raw), &actual) != nil || actual != target {
+				return store.Refuse("permission_denied")
+			}
+		}
 	}
 	if err != nil {
 		return dbError(ctx, err)

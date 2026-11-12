@@ -96,6 +96,7 @@ immutable until retirement. Record-dataset discovery supplies the associated `co
 | Capability | Meaning |
 | --- | --- |
 | `writes` | Imports and deletion are available. A read-only store — an archive, a mirror — omits it. |
+| `scoped_attachment_writes` | Imports bound to an authorized collection insert or creator-scoped record update. |
 | `thumbnails` | Bounded image renditions can be resolved without transferring the original. |
 | `ranges` | Resolved read URIs honour HTTP `Range`. Without it a reader transfers whole items. |
 | `current_representation` | The store distinguishes an item's `current` rendition from its `original`. Without it, only `original` exists. |
@@ -180,8 +181,36 @@ For its lifetime, whoever holds it can read those bytes.
 
 ## Writing
 
-Requires `writes` and the `write` grant. The shape follows the application's existing import contract:
-one durable operation, identified by the caller, resumable across sessions and crashes.
+Imports require `writes` and either the store's `write` grant or
+[scoped attachment authority](#scoped-attachment-writes). An import is one durable
+operation, identified by the caller and resumable across sessions and crashes.
+
+### Scoped attachment writes
+
+A store offering `scoped_attachment_writes` reports `access.scoped_write` when
+the current authorization has a collection insert grant or has read authority
+and a creator-scoped update grant. Each request still authorizes its target.
+
+The caller sends `attachment_target` with `type_id` and `collection_id`. With
+no `object_id`, the caller MUST hold an insert grant on that exact collection
+and concrete type. With `object_id`, the caller MUST currently be able to read
+and update that exact record through its creator-scoped grant. The record's
+stored membership MUST match `collection_id`. The target type MUST declare a
+media field, which may be inherited.
+
+The server binds the import to that target, the principal and its application
+authorization. Resuming with another target fails with `409 conflict` once the
+caller is authorized for the requested target. The server checks the target
+on begin, resume, transfer and commit. A withdrawn grant cannot advance the
+upload or commit it.
+
+For a scoped record write, a non-null media value MUST reference an item from
+the same dataset's store, uploaded by the same principal and application
+authorization for that target. An insert target permits attachment on inserts
+in its collection. An object target permits attachment on updates to that
+object. The record write also checks its current collection and creator
+permissions. Scoped upload authority conveys no item deletion or additional
+read access. The ordinary store quotas apply.
 
 ### Beginning or resuming
 

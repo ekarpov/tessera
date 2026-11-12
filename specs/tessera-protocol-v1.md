@@ -2651,8 +2651,9 @@ can grant creator-scoped rights separately.
   [`Prefer: return=representation`](#idempotency) is declined for the same reason.
 - **The watermark on its response is the dataset's**, as for any guest. It is opaque, and says only
   that something changed.
-- **Attaching content is not conveyed.** A `media` value needs the authority the
-  [content protocol](tessera-content-v1.md) defines, and an insert grant confers none.
+- **Attachments** require the authority defined by the
+  [content protocol](tessera-content-v1.md#scoped-attachment-writes). A collection insert
+  grant can authorize a target-bound upload on stores advertising that capability.
 
 A contributor's records count against the dataset like any other, and an insert grant can write as
 fast as its limits allow. **Admission, quota and rate are the deployment's**, as they are for every
@@ -2675,9 +2676,9 @@ visibility rules. A readable record whose collection or creator does not match i
 The same checks apply to an empty patch. Dataset-wide write retains its usual authority.
 
 Predicate-based updates and deletes still require dataset-wide write. Creator-scoped
-rights convey no insert, schema, dataset erasure, or content write permission. An update
-under these rights cannot set a non-null media value. The existing rules for immutable,
-creator and collection fields still apply. Grant changes serialize with the transaction
+rights convey no insert, schema, or dataset erasure permission. A non-null media value
+requires an item authorized by the [content protocol](tessera-content-v1.md#scoped-attachment-writes).
+The existing rules for immutable, creator and collection fields still apply. Grant changes serialize with the transaction
 that checks them.
 
 ## Content
