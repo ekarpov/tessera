@@ -17,7 +17,7 @@ only relevant specification sections and the sections below. Reuse guidance as d
 
 For Windows shell work, load [operations: Windows shell](references/operations.md#windows-shell).
 For development commands or CI, load [operations: commands and CI](references/operations.md#commands-and-ci).
-Release preconditions, including the independent consumer pass, remain in
+Server release preconditions remain in
 [releasing](../../../docs/releasing.md#preconditions).
 
 ## Go boundaries

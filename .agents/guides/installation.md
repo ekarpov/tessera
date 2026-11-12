@@ -28,5 +28,5 @@ in commands, tracked documents or test output.
 
 Use the storage skill's [verification guidance](../skills/go-storage-service/SKILL.md#verification).
 A local `make check` may skip PostgreSQL; report that limit. Release checks require both
-engines and the separate independent-consumer gate. For documentation changes, check links,
+engines and the server release checks. For documentation changes, check links,
 anchors, consistency and `go test ./internal/speccheck -count=1`.

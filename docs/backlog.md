@@ -4,11 +4,10 @@ Agreed work that remains open. Remove an item when it lands; its implementation 
 regression tests remain in Git. Check [the decision index](asked-and-answered.md) before
 proposing additional protocol work.
 
-## Active: the first release
+## Preparing a release
 
-Complete the [rc.4 acceptance checklist](rc.4-acceptance-checklist.md), resolve reported
-defects, then follow [the release procedure](releasing.md). Independent app/device and
-server acceptance is still required. No new tag or publication is implied by this list.
+Follow the [release procedure](releasing.md) for the exact server candidate.
+The [first-release checklist](rc.4-acceptance-checklist.md) retains historical evidence.
 
 ## Stream aggregates instead of materialising them
 
