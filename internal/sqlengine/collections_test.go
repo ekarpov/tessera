@@ -44,6 +44,17 @@ func TestCollectionConformance(t *testing.T) {
 			defer listener.Close()
 			err = conformance.CheckCollections(t.Context(), conformance.CollectionFixture{
 				URL: listener.URL, Owner: "owner", Client: listener.Client(),
+				SetOwn: func(ctx context.Context, name string, read, insert, update, remove []store.CollectionScope) (string, error) {
+					view, err := store.SharedView(nil).WithCollections(read, insert)
+					if err == nil {
+						view, err = view.WithOwnMutations(update, remove)
+					}
+					if err != nil {
+						return "", err
+					}
+					grants := store.Grants{Read: len(read) > 0, Insert: len(insert) > 0, UpdateOwn: len(update) > 0, DeleteOwn: len(remove) > 0}
+					return name, s.SetAuthorization(ctx, dataset, access(name), store.Authorization{View: view, Grants: grants})
+				},
 				Set: func(ctx context.Context, name string, read, insert []store.CollectionScope, expires *time.Time) (string, error) {
 					view, err := store.SharedView(nil).WithCollections(read, insert)
 					if err != nil {

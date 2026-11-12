@@ -214,7 +214,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 18 && version != 19 && version != 20 {
+	} else if version != 18 && version != 19 && version != 20 && version != 21 {
 		return nil, store.Refuse("not_supported")
 	}
 	if version != 0 && version < 19 {
@@ -227,8 +227,8 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 			}
 		}
 	}
-	if version != 0 && version < 20 {
-		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 20`); err != nil {
+	if version != 0 && version < 21 {
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 21`); err != nil {
 			return nil, dbError(ctx, err)
 		}
 	}

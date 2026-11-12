@@ -193,4 +193,4 @@ CREATE TABLE "tessera_managed_installations" (
     FOREIGN KEY ("dataset_id", "type_id") REFERENCES "tessera_types" ON DELETE CASCADE
 );
 
-PRAGMA user_version = 20;
+PRAGMA user_version = 21;

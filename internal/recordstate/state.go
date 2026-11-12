@@ -286,7 +286,7 @@ func (s *Store) Info(ctx context.Context, a store.Access, dataset string) (store
 	}
 	capabilities := append(s.ReadCapabilities(), p.CollectionAccessCapability)
 	if s.limits.MaxTextBytes >= p.CreatorIDBytes {
-		capabilities = append(capabilities, p.CreatorAttributionCapability)
+		capabilities = append(capabilities, p.CreatorAttributionCapability, p.CreatorScopedMutationsCapability)
 	}
 	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: capabilities, Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest(&s.secret, "view", viewBytes(g.View)), SchemaVersion: s.digest(&s.secret, "schema", raw)}, nil
 }
@@ -778,9 +778,6 @@ func (t *transaction) record(typeID, id string, o object, fields []string, inclu
 // convertDeclared fills creator fields on insert and reports which supplied
 // fields are immutable for updates.
 func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool) (map[string]p.Value, map[string]bool, error) {
-	if !t.auth.View.AllowsQueryType(typeID) && !t.auth.View.AllowsInsertType(typeID) {
-		return nil, nil, store.Refuse("permission_denied")
-	}
 	meta, err := t.effective(typeID)
 	if err != nil {
 		return nil, nil, err
@@ -797,8 +794,7 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 			if creator.Type() == p.NullType {
 				// Bind to the dataset and principal, never the installation or
 				// a caller-supplied identity. Keep the principal off the wire.
-				digest := t.engine.digest(&t.engine.creatorSecret, "record_creator", []byte(t.principal))
-				creator, err = p.NewValue(p.TextType, digest[2:2+p.CreatorIDBytes])
+				creator, err = p.NewValue(p.TextType, t.creatorID())
 				if err != nil {
 					return nil, nil, err
 				}
@@ -818,7 +814,7 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 		}
 		kind := declared.Type
 		if kind == p.MediaType && v.Type() != p.NullType {
-			if inserting && !t.auth.Grants.Write && !t.auth.View.AllowsInsert(typeID) {
+			if !t.auth.Grants.Write && (!inserting || !t.auth.View.AllowsInsert(typeID)) {
 				return nil, nil, store.Refuse("permission_denied")
 			}
 			if t.engine.mediaAuthority == nil {
@@ -899,10 +895,7 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 }
 func (t *transaction) Delete(typeID, id string) (err error) {
 	defer func() { t.fail(err) }()
-	if err = t.check(t.auth.Grants.Write); err != nil {
-		return err
-	}
-	if _, err = t.lookup(typeID, id); err != nil {
+	if _, err = t.ownMutationTarget(typeID, id, true); err != nil {
 		return err
 	}
 	if err = t.touch(); err != nil {
@@ -915,10 +908,7 @@ func (t *transaction) Delete(typeID, id string) (err error) {
 // Update sets named fields; an empty PATCH is a checked no-op.
 func (t *transaction) Update(typeID, id string, fields map[string]p.Value) (err error) {
 	defer func() { t.fail(err) }()
-	if err = t.check(t.auth.Grants.Write); err != nil {
-		return err
-	}
-	o, err := t.lookup(typeID, id)
+	o, err := t.ownMutationTarget(typeID, id, false)
 	if err != nil {
 		return err
 	}
@@ -1050,7 +1040,8 @@ func (t *transaction) version(o object) string {
 }
 func (t *transaction) Authorize(g store.Grants) error {
 	return t.check((!g.Read || t.auth.Grants.Read) && (!g.Write || t.auth.Grants.Write) && (!g.Schema || t.auth.Grants.Schema) && (!g.Erase || t.auth.Grants.Erase) &&
-		(!g.Insert || t.auth.Grants.Write || t.auth.Grants.Insert))
+		(!g.Insert || t.auth.Grants.Write || t.auth.Grants.Insert) &&
+		(!g.UpdateOwn || t.canMutateOwn(false)) && (!g.DeleteOwn || t.canMutateOwn(true)))
 }
 func (t *transaction) Expect(typeID, id string, fields map[string]p.Value, version *string) (err error) {
 	defer func() { t.fail(err) }()

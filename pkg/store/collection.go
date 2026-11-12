@@ -16,29 +16,59 @@ type CollectionScope struct {
 // WithCollections supplies independent read and insert scopes to a trusted host
 // view. Dataset-level rights still govern which scopes are effective.
 func (v View) WithCollections(read, insert []CollectionScope) (View, error) {
-	if !v.Valid() || len(read)+len(insert) > 256 {
-		return View{}, Refuse("invalid_field")
+	if err := v.validateCollections(read, insert); err != nil {
+		return View{}, err
 	}
-	for _, list := range [][]CollectionScope{read, insert} {
+	v.readCollections, v.insertCollections = canonicalCollections(read), canonicalCollections(insert)
+	return v, nil
+}
+
+// WithOwnMutations adds independent creator-scoped update and delete permissions.
+func (v View) WithOwnMutations(update, remove []CollectionScope) (View, error) {
+	if err := v.validateCollections(update, remove); err != nil {
+		return View{}, err
+	}
+	v.updateOwn, v.deleteOwn = canonicalCollections(update), canonicalCollections(remove)
+	return v, nil
+}
+
+func (v View) validateCollections(first, second []CollectionScope) error {
+	if !v.Valid() || len(first)+len(second) > 256 {
+		return Refuse("invalid_field")
+	}
+	for _, list := range [][]CollectionScope{first, second} {
 		for _, scope := range list {
 			if p.ValidateIdentifier(p.MetaIdentifier, scope.TypeID) != nil ||
 				p.ValidateIdentifier(p.ObjectIdentifier, scope.ID) != nil {
-				return View{}, Refuse("invalid_identifier")
+				return Refuse("invalid_identifier")
 			}
 		}
 	}
-	canonical := func(scopes []CollectionScope) []CollectionScope {
-		out := slices.Clone(scopes)
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].TypeID != out[j].TypeID {
-				return out[i].TypeID < out[j].TypeID
-			}
-			return out[i].ID < out[j].ID
-		})
-		return slices.Compact(out)
+	return nil
+}
+
+func canonicalCollections(scopes []CollectionScope) []CollectionScope {
+	if len(scopes) == 0 {
+		return nil
 	}
-	v.readCollections, v.insertCollections = canonical(read), canonical(insert)
-	return v, nil
+	out := slices.Clone(scopes)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TypeID != out[j].TypeID {
+			return out[i].TypeID < out[j].TypeID
+		}
+		return out[i].ID < out[j].ID
+	})
+	return slices.Compact(out)
+}
+
+// AllowsOwnMutation checks an exact type and collection. The evaluator
+// separately checks visibility and creator attribution.
+func (v View) AllowsOwnMutation(typeID, id string, remove bool) bool {
+	scopes := v.updateOwn
+	if remove {
+		scopes = v.deleteOwn
+	}
+	return id != "" && slices.Contains(scopes, CollectionScope{typeID, id})
 }
 
 func (v View) HasCollectionReads() bool { return len(v.readCollections) != 0 }

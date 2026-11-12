@@ -54,9 +54,11 @@ before it is worth anything, which is what the rest of this section is for.
 
 The core checks current dataset and application authority in the transaction performing the write.
 Authorization and the write MUST observe the same snapshot: concurrent revocation either precedes the
-decision or follows the write. Guest grants can authorize reads and inserts within their scope.
+decision or follows the write. Guest grants can authorize reads, inserts, and creator-scoped updates and deletes.
 Type and collection grants cover exact concrete types. Collection reads also check the membership
-fixed at insertion.
+fixed at insertion. The host uses `View.WithOwnMutations(update, remove)` with
+`Grants.UpdateOwn` and `Grants.DeleteOwn` to grant explicit mutations by exact type and
+collection. The store also requires current read authority and a matching creator stamp.
 
 The proposed existing/proposed-state write hook is abandoned for v1. Collection membership is the only field-based authorization rule. Workflow transitions and
 arbitrary guest-write hooks remain outside the protocol. A host needing domain workflow defines

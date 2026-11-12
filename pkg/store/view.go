@@ -91,7 +91,9 @@ func (v View) MarshalJSON() ([]byte, error) {
 		Inserts           []string          `json:"insert_types,omitempty"`
 		ReadCollections   []CollectionScope `json:"read_collections,omitempty"`
 		InsertCollections []CollectionScope `json:"insert_collections,omitempty"`
-	}{v.full, v.sequenceCut, types, objects, inserts, v.readCollections, v.insertCollections})
+		UpdateOwn         []CollectionScope `json:"update_own_collections,omitempty"`
+		DeleteOwn         []CollectionScope `json:"delete_own_collections,omitempty"`
+	}{v.full, v.sequenceCut, types, objects, inserts, v.readCollections, v.insertCollections, v.updateOwn, v.deleteOwn})
 }
 func (v *View) UnmarshalJSON(raw []byte) error {
 	var wire struct {
@@ -102,6 +104,8 @@ func (v *View) UnmarshalJSON(raw []byte) error {
 		Inserts           []string          `json:"insert_types"`
 		ReadCollections   []CollectionScope `json:"read_collections"`
 		InsertCollections []CollectionScope `json:"insert_collections"`
+		UpdateOwn         []CollectionScope `json:"update_own_collections"`
+		DeleteOwn         []CollectionScope `json:"delete_own_collections"`
 	}
 	if json.Unmarshal(raw, &wire) != nil {
 		return Refuse("invalid_field")
@@ -116,6 +120,9 @@ func (v *View) UnmarshalJSON(raw []byte) error {
 			return Refuse("invalid_field")
 		}
 		next, err := FullView().WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut).WithCollections(wire.ReadCollections, wire.InsertCollections)
+		if err == nil && (len(wire.UpdateOwn) != 0 || len(wire.DeleteOwn) != 0) {
+			next, err = next.WithOwnMutations(wire.UpdateOwn, wire.DeleteOwn)
+		}
 		*v = next
 		return err
 	}
@@ -130,6 +137,9 @@ func (v *View) UnmarshalJSON(raw []byte) error {
 		}
 	}
 	next, err := SharedView(wire.Types, wire.Objects...).WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut).WithCollections(wire.ReadCollections, wire.InsertCollections)
+	if err == nil && (len(wire.UpdateOwn) != 0 || len(wire.DeleteOwn) != 0) {
+		next, err = next.WithOwnMutations(wire.UpdateOwn, wire.DeleteOwn)
+	}
 	*v = next
 	return err
 }

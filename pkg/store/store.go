@@ -33,6 +33,9 @@ type Grants struct {
 	// commits. It is separate from Write because it is the whole of what a
 	// contributor holds, and a contributor is not an owner.
 	Insert bool `json:"insert"`
+	// UpdateOwn and DeleteOwn require Read and a matching creator collection scope.
+	UpdateOwn bool `json:"update_own,omitempty"`
+	DeleteOwn bool `json:"delete_own,omitempty"`
 }
 
 type ObjectKey struct{ TypeID, ObjectID string }
@@ -49,6 +52,7 @@ type View struct {
 	inserts                            map[string]struct{}
 	sequenceCut                        uint64
 	readCollections, insertCollections []CollectionScope
+	updateOwn, deleteOwn               []CollectionScope
 }
 
 func FullView() View { return View{initialized: true, full: true} }

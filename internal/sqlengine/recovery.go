@@ -409,7 +409,7 @@ func (s *Store) claim(ctx context.Context, a store.Access, m store.Mutation) (st
 	if err = engine.Transact(ctx, a, m.Dataset, func(core store.Tx) error { return store.AuthorizeTransaction(core, m.Transaction) }); err != nil {
 		return store.Reply{}, false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_receipts" ("key","dataset_id","principal","authorization","digest","claimed_at","state","watermark","replay_scope","executor_id") VALUES ($1,$2,$3,$4,$5,$6,'in_progress',$7,$8,$9)`, m.Key, m.Dataset, a.Principal, a.Authorization, m.Digest[:], time.Now().UnixMilli(), image.Watermark, replayScope(m.Transaction), s.executor)
+	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_receipts" ("key","dataset_id","principal","authorization","digest","claimed_at","state","watermark","replay_scope","executor_id") VALUES ($1,$2,$3,$4,$5,$6,'in_progress',$7,$8,$9)`, m.Key, m.Dataset, a.Principal, a.Authorization, m.Digest[:], time.Now().UnixMilli(), image.Watermark, replayScope(m.Transaction, !h.auth.Grants.Write), s.executor)
 	if err != nil {
 		return store.Reply{}, false, dbError(ctx, err)
 	}
@@ -498,7 +498,7 @@ func replyWatermark(raw []byte) string {
 	return body.Watermark
 }
 
-func replayScope(t p.Transaction) string {
+func replayScope(t p.Transaction, scoped bool) string {
 	inserts := len(t.Operations) > 0
 	for _, op := range t.Operations {
 		inserts = inserts && op.Op == "insert"
@@ -513,6 +513,11 @@ func replayScope(t p.Transaction) string {
 			deleted = false
 		case "delete_type":
 		case "delete", "delete_where":
+			schema = false
+		case "update":
+			if !scoped {
+				return "read"
+			}
 			schema = false
 		default:
 			return "read"

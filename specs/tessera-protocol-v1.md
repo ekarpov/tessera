@@ -746,6 +746,7 @@ Everything a client can do for itself, given the required operations above.
 | `sharing` | Grants to principals other than the owner. | Sees only its own datasets. |
 | `creator_attribution` | Server-populated [creator fields](#creator-fields). | Has no trusted creator value. |
 | `collection_access` | Exact-type collection reads and inserts through [collection fields](#collection-fields). | Uses the ordinary type and object grants. |
+| `creator_scoped_mutations` | Explicit updates and deletes within [creator-scoped grants](#creator-scoped-grants). | Updates and deletes require dataset write authority. |
 
 **`aggregation`, `distinct_references` and `text_matching` were on this list and are now required
 operations.** A server MUST NOT advertise them: there is no choice left to report.
@@ -772,7 +773,7 @@ rather than run forever. A client compensating MUST stop at a limit of its own a
 `query_result_limit_exceeded` a declining server would have returned. Silent compensation turns a
 missing capability into an unexplained hang.
 
-This applies to `content`, `sharing`, `creator_attribution` and `collection_access`, none of which a client can fake. That is
+This applies to `content`, `sharing`, `creator_attribution`, `collection_access` and `creator_scoped_mutations`, none of which a client can fake. That is
 not a coincidence: an optional capability a client *can* compensate for is one where compensation
 and operation give different answers, which is the case for making it required rather than
 documenting the gap.
@@ -2277,6 +2278,9 @@ everything it describes:
   over the dataset. Its body describes types, which are not anybody's records.
 - **A delete-only transaction** has identities and no values, so there is nothing to withhold: the
   owner learns it committed and which identities are gone.
+- **A transaction containing only successful explicit creator-scoped updates and deletes**
+  reports the original effect counts. These disclose no record values and remain replayable
+  to the original receipt owner even when the grant ends or the target is gone.
 - **A created object since deleted** puts the whole body in the withheld form, by the rule above. The
   identity survives, which is the part that stops a second write.
 
@@ -2554,15 +2558,16 @@ Two mechanisms are easy to confuse:
 
 - **Access** — `read`, `write`, `schema`, `erase` — is what a caller may do with a dataset it is
   entitled to. It is account state, set by whatever administers the deployment, and it is how an owner
-  and their applications work.
+  and their applications work. A server may also report `update_own` and `delete_own`
+  when the installation has those [scoped rights](#creator-scoped-grants).
 - **A grant** extends access to *another* principal, and in v1 conveys `read` or
-  [`insert`](#insert-grants) within its scope. The two rights are granted independently.
+  [`insert`](#insert-grants) within its scope. A deployment can also grant
+  [creator-scoped updates or deletes](#creator-scoped-grants). Each right is granted independently.
 
 So a **service** authenticating with `client_credentials` is an ordinary principal: it may hold `write`
 on datasets it is entitled to — its own, or ones a deployment assigns it — and it may be granted read
 on someone else's. What it cannot do is be *granted* write on a dataset owned by a person, because no
-grant conveys write. It may be granted `insert`, which adds and conveys nothing else. A service that must write on a person's behalf is either writing in a dataset it
-holds `write` on, or it is not writing at all.
+grant conveys dataset-wide write. It may be granted individual contribution rights under the same rules as other principals.
 
 This matters for a hosting deployment. Holding a person's dataset does not make the host a writer in
 it: if the host's service needs to record something, it does so in a dataset of its own and shares it,
@@ -2617,14 +2622,13 @@ not change what its clients have to handle.
 
 **An insert grant conveys no continuing authority over what was written.** It lets a principal add
 records of exactly the concrete types and, where named, collections it grants. What it adds belongs to the dataset
-from the moment it commits: the contributor cannot read it, change it or delete it, unless some
-other grant it holds would let it do that to any record of the type — in which case that grant does,
-and the record is to it like any other.
+from the moment it commits: the contributor cannot read it, change it or delete it, unless
+another grant independently authorizes that action.
 
 It is for a writer with no continuing relationship with what it writes: a form, a survey, a device
 or a sensor, a feed reporting transactions, a till reporting totals — something asserted once and
-never revised by its sender. **A writer who has to correct and withdraw what it wrote is not a
-contributor**, and nothing here should be extended to make it one.
+never revised by its sender. A deployment that lets the sender revise or withdraw a record
+can grant creator-scoped rights separately.
 
 - **Exact concrete types**, never descendants, for the reason a type grant never covers one.
   Inserting any other type fails `403 permission_denied`.
@@ -2637,7 +2641,7 @@ contributor**, and nothing here should be extended to make it one.
 - **Composition is by type and by right, and nothing else.** A principal may hold read on some types
   and insert on others, or both on one. Each right authorizes its own operations: a record it added
   to a type it also reads is visible because it reads that type, exactly as any other record of the
-  type is, and not because it added it. There is no rule of the form *its own records*.
+  type is, and not because it added it.
 - **An insert is an insert through every route**: the single-operation form, and `insert` inside
   `:transact`. A transaction is authorized per operation, so a contributor's transaction that also
   checks or changes anything fails at the first operation that needs more, before any write.
@@ -2654,6 +2658,27 @@ A contributor's records count against the dataset like any other, and an insert 
 fast as its limits allow. **Admission, quota and rate are the deployment's**, as they are for every
 write; see [the deployment contract](tessera-deployment.md). An owner who did not want a
 contribution deletes it, as it would any record.
+
+#### Creator-scoped grants
+
+A dataset advertising `creator_scoped_mutations` also advertises `creator_attribution` and
+`collection_access`. Deployments may grant `update_own` and `delete_own` independently,
+each over an exact concrete type and collection pair. These rights authorize an explicit
+record update or delete through its single-record route or a transaction operation. The
+principal MUST currently be able to read the record. The server MUST check that a stored
+creator field matches the principal's dataset-local creator ID and that the record's
+immutable membership matches the grant. An unstamped record has no creator authority.
+
+A record outside the caller's readable view is `404 unavailable` under the ordinary
+visibility rules. A readable record whose collection or creator does not match is
+`403 permission_denied`. A missing mutation right is also `403 permission_denied`.
+The same checks apply to an empty patch. Dataset-wide write retains its usual authority.
+
+Predicate-based updates and deletes still require dataset-wide write. Creator-scoped
+rights convey no insert, schema, dataset erasure, or content write permission. An update
+under these rights cannot set a non-null media value. The existing rules for immutable,
+creator and collection fields still apply. Grant changes serialize with the transaction
+that checks them.
 
 ## Content
 

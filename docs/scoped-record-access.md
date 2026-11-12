@@ -1,6 +1,6 @@
 # Scoped record access
 
-Creator attribution, collection read grants and scoped inserts are implemented.
+Creator attribution, collection sharing, and scoped inserts, updates and deletes are implemented.
 A schema declares an insertion-only text field with `"collection": true`.
 A record's value in that field identifies its collection within the dataset.
 The same collection can span concrete types when each type is explicitly granted.
@@ -17,6 +17,18 @@ grants. Collection administration is available through the embedding API.
 portable record operations. The SQL suite checks managed and shared field
 storage, content visibility and restore.
 
-Creator-scoped edits and deletes, and enumeration and erasure of a principal's
-contributions, remain planned. The host coordinates account-wide cleanup and
-owns any placeholders it retains.
+## Creator-scoped updates and deletes
+
+The embedding host sets separate exact type and collection pairs through
+`View.WithOwnMutations(update, remove)` with `Grants.UpdateOwn` and
+`Grants.DeleteOwn`. The store checks current read access and the record's creator
+stamp on every explicit update or delete. Changes use the ordinary transaction
+and receipt paths.
+
+## Principal-wide cleanup
+
+A separate host operation is planned for enumerating and erasing a principal's
+stamped contributions across datasets. That slice needs a bounded storage scan,
+a plan for concurrent inserts and revocation, and rules for retained receipts,
+content and restored backups. The host coordinates account-wide cleanup and owns
+any placeholders it retains.

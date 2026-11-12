@@ -22,6 +22,8 @@ const CreatorAttributionCapability = "creator_attribution"
 
 const CollectionAccessCapability = "collection_access"
 
+const CreatorScopedMutationsCapability = "creator_scoped_mutations"
+
 // CreatorIDBytes is the encoded size of a dataset-scoped creator ID.
 const CreatorIDBytes = 32
 
@@ -33,9 +35,9 @@ const CreatorIDBytes = 32
 // telling an operator this deployment withheld three things the protocol no
 // longer lets anyone decline.
 func DatasetCapabilities() []string {
-	names := make([]string, 0, len(OptionalReadCapabilities)+4)
+	names := make([]string, 0, len(OptionalReadCapabilities)+5)
 	names = append(names, OptionalReadCapabilities...)
-	return append(names, "content", "sharing", CreatorAttributionCapability, CollectionAccessCapability)
+	return append(names, "content", "sharing", CreatorAttributionCapability, CollectionAccessCapability, CreatorScopedMutationsCapability)
 }
 
 // DatasetCreationCapability says that the creation route exists on this

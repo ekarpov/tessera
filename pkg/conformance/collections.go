@@ -23,6 +23,8 @@ type CollectionFixture struct {
 	URL, Owner string
 	Client     *http.Client
 	Set        func(context.Context, string, []store.CollectionScope, []store.CollectionScope, *time.Time) (string, error)
+	// SetOwn replaces a named principal's collection reads, inserts, updates and deletes.
+	SetOwn func(context.Context, string, []store.CollectionScope, []store.CollectionScope, []store.CollectionScope, []store.CollectionScope) (string, error)
 }
 
 // CheckCollections verifies collection_access through the wire protocol. The
@@ -108,6 +110,9 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 		{ID: "membership", MetaID: typ, Type: p.TextType, Collection: true},
 		{ID: "rank", MetaID: typ, Type: p.IntegerType},
 	}}
+	if slices.Contains(listing.Datasets[0].Capabilities, p.CreatorScopedMutationsCapability) {
+		schema.Fields = append(schema.Fields, p.Field{ID: "creator", MetaID: typ, Type: p.TextType, Creator: true})
+	}
 	for _, m := range []p.Meta{schema, {ID: child, ParentID: &typ}} {
 		if err := call("POST", base+"/meta", f.Owner, map[string]any{"type": m}, 201, nil); err != nil {
 			return err
@@ -327,5 +332,90 @@ func CheckCollections(ctx context.Context, f CollectionFixture) error {
 	if _, err = f.Set(ctx, "reader", beta, nil, &expired); err != nil {
 		return err
 	}
-	return problem("GET", objects+"/"+url.PathEscape(hidden), reader, nil, 404, "unavailable")
+	if err = problem("GET", objects+"/"+url.PathEscape(hidden), reader, nil, 404, "unavailable"); err != nil {
+		return err
+	}
+	if !slices.Contains(listing.Datasets[0].Capabilities, p.CreatorScopedMutationsCapability) {
+		return nil
+	}
+	if f.SetOwn == nil {
+		return fmt.Errorf("creator-scoped mutation fixture must supply SetOwn")
+	}
+	contributor, err = f.SetOwn(ctx, "contributor", append(slices.Clone(alpha), beta...), beta, alpha, nil)
+	if err != nil {
+		return err
+	}
+	outside, err := insert(contributor, "beta", 52)
+	if err != nil {
+		return err
+	}
+	contributor, err = f.SetOwn(ctx, "contributor", alpha, alpha, alpha, nil)
+	if err != nil {
+		return err
+	}
+	own, err := insert(contributor, "alpha", 53)
+	if err != nil {
+		return err
+	}
+	ownPath := objects + "/" + url.PathEscape(own)
+	changes := map[string]any{"fields": fields("", 54)}
+	if err = problem("PATCH", objects+"/"+url.PathEscape(visible), contributor, changes, 403, "permission_denied"); err != nil {
+		return err
+	}
+	if err = problem("PATCH", objects+"/"+url.PathEscape(outside), contributor, changes, 404, "unavailable"); err != nil {
+		return err
+	}
+	if err = problem("DELETE", ownPath, contributor, nil, 403, "permission_denied"); err != nil {
+		return err
+	}
+	if err = problem("PATCH", ownPath, contributor, map[string]any{"fields": map[string]p.Value{"creator": {}}}, 400, "invalid_field"); err != nil {
+		return err
+	}
+	if err = problem("POST", objects+":update", contributor, map[string]any{"filter": map[string]any{"object_ids": []string{own}}, "fields": fields("", 55)}, 403, "permission_denied"); err != nil {
+		return err
+	}
+	// A refused mutation rolls back an earlier authorized delete in the same transaction.
+	if _, err = f.SetOwn(ctx, "contributor", alpha, nil, alpha, alpha); err != nil {
+		return err
+	}
+	ownBatch := map[string]any{"operations": []any{
+		map[string]any{"op": "delete", "target": map[string]any{"type": typ, "id": own}},
+		map[string]any{"op": "delete", "target": map[string]any{"type": typ, "id": visible}},
+	}}
+	if err = problem("POST", base+":transact", contributor, ownBatch, 403, "permission_denied"); err != nil {
+		return err
+	}
+	if err = call("GET", ownPath, contributor, nil, 200, nil); err != nil {
+		return err
+	}
+	operation = "53c49d33-8f35-439e-836c-" + hex.EncodeToString(nonce[:6])
+	headers["Idempotency-Key"] = operation
+	var updated json.RawMessage
+	if err = callWithHeaders("PATCH", ownPath, contributor, changes, headers, 200, &updated); err != nil {
+		return err
+	}
+	if _, err = f.SetOwn(ctx, "contributor", append(slices.Clone(alpha), beta...), nil, nil, alpha); err != nil {
+		return err
+	}
+	if err = problem("PATCH", ownPath, contributor, changes, 403, "permission_denied"); err != nil {
+		return err
+	}
+	if err = problem("DELETE", objects+"/"+url.PathEscape(outside), contributor, nil, 403, "permission_denied"); err != nil {
+		return err
+	}
+	if err = call("DELETE", ownPath, contributor, nil, 200, nil); err != nil {
+		return err
+	}
+	if err = problem("GET", ownPath, f.Owner, nil, 404, "not_found"); err != nil {
+		return err
+	}
+	status = base + "/operations/" + operation + ":status"
+	receipt = store.Receipt{}
+	if err = call("POST", status, contributor, nil, 200, &receipt); err != nil {
+		return err
+	}
+	if receipt.ResultWithheld || !bytes.Equal(receipt.Result, updated) {
+		return fmt.Errorf("creator-scoped update recovery lost the original effect")
+	}
+	return nil
 }
