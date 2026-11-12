@@ -46,8 +46,13 @@ func (s *Store) BeginContributionErasure(ctx context.Context, dataset, principal
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_contribution_erasure" ("dataset_id","creator_id","job_id")
-		VALUES ($1,$2,$3) ON CONFLICT ("dataset_id","creator_id") DO NOTHING`, dataset, creator, job); err != nil {
+	started, err := tx.ExecContext(ctx, `INSERT INTO "tessera_contribution_erasure" ("dataset_id","creator_id","job_id")
+		VALUES ($1,$2,$3) ON CONFLICT ("dataset_id","creator_id") DO NOTHING`, dataset, creator, job)
+	if err != nil {
+		return "", dbError(ctx, err)
+	}
+	added, err := started.RowsAffected()
+	if err != nil {
 		return "", dbError(ctx, err)
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT "job_id" FROM "tessera_contribution_erasure" WHERE "dataset_id"=$1 AND "creator_id"=$2`, dataset, creator).Scan(&job); err != nil {
@@ -56,6 +61,13 @@ func (s *Store) BeginContributionErasure(ctx context.Context, dataset, principal
 	for _, table := range []string{`"tessera_access"`, `"tessera_receipts"`} {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE "dataset_id"=$1 AND "principal"=$2`, dataset, principal); err != nil {
 			return "", dbError(ctx, err)
+		}
+	}
+	// A snapshot can still hold records already removed by ordinary writes.
+	// Invalidate it even when the contribution index has nothing left to step.
+	if added != 0 {
+		if err = invalidateContributionPages(ctx, tx, dataset); err != nil {
+			return "", err
 		}
 	}
 	if err = eraseScopedUploads(ctx, tx, dataset, principal); err != nil {
@@ -107,6 +119,11 @@ func (s *Store) StepContributionErasure(ctx context.Context, dataset, job string
 	if err = eraseContributionRecords(ctx, tx, dataset, keys[:min(len(keys), limit)]); err != nil {
 		return false, err
 	}
+	// An ordinary delete can remove the final indexed row between batches
+	// while leaving a snapshot opened since the previous batch readable.
+	if err = invalidateContributionPages(ctx, tx, dataset); err != nil {
+		return false, err
+	}
 	finished := len(keys) <= limit
 	if finished {
 		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_contribution_erasure" SET "done"=1 WHERE "job_id"=$1`, job); err != nil {
@@ -128,6 +145,7 @@ func eraseContributionRecords(ctx context.Context, tx *sql.Tx, dataset string, k
 		// Mark items orphaned by this deletion. A reference from a surviving
 		// record keeps the item live, even if it was linked multiple times.
 		if _, err := tx.ExecContext(ctx, `UPDATE "tessera_items" SET "deleted"=1 WHERE "deleted"=0
+			AND "store_id" IN (SELECT "id" FROM "tessera_content_stores" WHERE "dataset_id"=$1)
 			AND ("store_id","item_id") IN (SELECT a."store_id",a."item_id" FROM "tessera_attachments" a
 				WHERE a."dataset_id"=$1 AND a."object_id"=$2)
 			AND NOT EXISTS (SELECT 1 FROM "tessera_attachments" a WHERE a."store_id"="tessera_items"."store_id"
@@ -145,9 +163,6 @@ func eraseContributionRecords(ctx context.Context, tx *sql.Tx, dataset string, k
 		}
 		totalBytes += bytes
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM "tessera_sequences" WHERE "dataset_id"=$1`, dataset); err != nil {
-		return dbError(ctx, err)
-	}
 	watermark, err := cursorToken()
 	if err != nil {
 		return err
@@ -159,9 +174,16 @@ func eraseContributionRecords(ctx context.Context, tx *sql.Tx, dataset string, k
 	return nil
 }
 
+func invalidateContributionPages(ctx context.Context, tx *sql.Tx, dataset string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM "tessera_sequences" WHERE "dataset_id"=$1`, dataset); err != nil {
+		return dbError(ctx, err)
+	}
+	return nil
+}
+
 // A backup that predates a contribution erasure cannot safely restore the
 // erased bytes. Keep the fence independent and require a post-erasure archive.
-func checkContributionArchive(manifest backupManifest, fence []byte) error {
+func checkContributionArchive(manifest backupManifest, fence []byte, erasedDatasets []string) error {
 	live := map[string]bool{}
 	done := map[string]bool{}
 	for _, table := range manifest.Tables {
@@ -196,6 +218,10 @@ func checkContributionArchive(manifest backupManifest, fence []byte) error {
 				done[contributionFencePrefix+dataset+":"+job] = true
 			}
 		}
+	}
+	// Whole-dataset retirement removes all contributions during restore.
+	for _, dataset := range erasedDatasets {
+		delete(live, dataset)
 	}
 	for _, line := range strings.Split(string(fence), "\n") {
 		if line == "" {

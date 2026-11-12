@@ -505,11 +505,11 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	if err != nil {
 		return store.Refuse("dataset_unavailable")
 	}
-	if err = checkContributionArchive(manifest, fence); err != nil {
-		return err
-	}
 	erasedDatasets, erasedStores, err := retiredInBackup(manifest, fence)
 	if err != nil {
+		return err
+	}
+	if err = checkContributionArchive(manifest, fence, erasedDatasets); err != nil {
 		return err
 	}
 	if _, err = os.Stat(destination); !os.IsNotExist(err) {

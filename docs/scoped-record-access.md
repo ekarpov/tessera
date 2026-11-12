@@ -42,10 +42,12 @@ recover existing stamps that are still present in storage.
 
 `BeginContributionErasure` revokes the principal's authorizations and receipts
 in that dataset and returns a stable job ID. `StepContributionErasure` deletes
-bounded batches and can resume across restarts. Batches remove record links and
-retained page snapshots, and mark attachments with no surviving references for
-the existing content cleanup. The erasure fence requires an archive taken
-after the job completes before that dataset can be restored. Keep the current
+bounded batches and can resume across restarts. Starting the job and stepping it
+invalidate retained page snapshots. Batches remove record links and mark
+attachments with no surviving references for the existing content cleanup.
+Restoring a live dataset requires an archive taken after its contribution
+erasure completes. If the fence retires the entire dataset, restore reapplies
+that retirement and recovers the other datasets. Keep the current
 fence independently of the archive.
 
 The host runs this operation for each dataset in scope, handles account

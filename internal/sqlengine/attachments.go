@@ -22,22 +22,18 @@ func (s *Store) authorizeAttachment(ctx context.Context, tx *sql.Tx, a store.Acc
 	if err != nil {
 		return err
 	}
+	if owning != dataset {
+		return store.Refuse("permission_denied")
+	}
 	var one int
 	owner := auth.Grants.Write && auth.View.Full()
-	if owner && owning != dataset {
-		recordAuth, err := authorization(ctx, tx, dataset, a)
-		if err != nil {
-			return err
-		}
-		owner = recordAuth.Grants.Write && recordAuth.View.Full()
-	}
 	if owner {
 		err = tx.QueryRowContext(ctx, `SELECT 1 FROM "tessera_items" WHERE "store_id"=$1 AND "item_id"=$2 AND "deleted"=0`, storeID, itemID).Scan(&one)
 		if err == sql.ErrNoRows {
 			return store.Refuse("unavailable")
 		}
 	} else {
-		if owning != dataset || target.Validate() != nil ||
+		if target.Validate() != nil ||
 			target.ObjectID == "" && (!auth.Grants.Insert || !auth.View.AllowsCollectionInsert(target.TypeID, target.CollectionID)) {
 			return store.Refuse("permission_denied")
 		}

@@ -26,14 +26,17 @@ func newContentCall(ctx context.Context, client *http.Client, baseURL, token str
 		client = http.DefaultClient
 	}
 	return func(method, target, contentRange string, body []byte, status int) (map[string]any, error) {
-		if len(target) > 0 && target[0] == '/' {
+		control := strings.HasPrefix(target, "/")
+		if control {
 			target = baseURL + target
 		}
 		req, e := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 		if e != nil {
 			return nil, e
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		if control {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		if contentRange != "" {
 			req.Header.Set("Content-Range", contentRange)
 		} else if body != nil {
