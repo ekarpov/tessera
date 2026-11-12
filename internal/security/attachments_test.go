@@ -2,6 +2,7 @@ package security_test
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -10,25 +11,17 @@ import (
 	"github.com/ekarpov/tessera/pkg/store"
 )
 
-// A media reference names a store and an item, and nothing stops one crossing
-// a dataset: a record in one dataset may refer to an item in another's store.
-// The attachment rows that record writes belong to the dataset that wrote
-// them, and the visibility check read them without asking whose they were —
-// so a reader sharing a type in one dataset had that allowance applied to an
-// object in a dataset they cannot reach at all, and the bytes came back.
-//
-// The first attempt at this put the item in the other dataset's store, which
-// is refused earlier and proves nothing. The item has to be in the reader's
-// own dataset, referenced only from outside it.
+// A legacy attachment row belongs to the dataset that wrote it. A reader
+// sharing a type in the item's dataset must not inherit access from a
+// matching type in a different dataset.
 func TestAShareOfOneDatasetIsNotAKeyToAnothersReferences(t *testing.T) {
 	x := tenants(t)
 	typeID, _, _ := x.seed(t, x.aliceTok, x.aliceSet, x.aliceStore)
 	// A second item in Alice's store, referenced by nothing in her dataset.
 	loose := x.upload(t, x.aliceTok, x.aliceStore, "cccccccccccccccccccccccccccccccc")
 
-	// Carol holds Alice's dataset and may create. One authorization spans two
-	// datasets only by creating the second, which is how a reference comes to
-	// cross in the first place.
+	// Carol has write access to the item store and creates the second dataset.
+	// The current protocol still refuses a write crossing that boundary.
 	if err := x.runtime.Authority.AddPerson("carol", password, x.aliceSet,
 		store.Grants{Read: true, Write: true, Schema: true}, true); err != nil {
 		t.Fatal(err)
@@ -57,9 +50,27 @@ func TestAShareOfOneDatasetIsNotAKeyToAnothersReferences(t *testing.T) {
 		`{"type":{"id":"`+typeID+`","name":"Record","fields":[{"id":"photo","meta_id":"`+typeID+`","type":"media"}]}}`, nil); w.Code != 201 {
 		t.Fatal("could not define the crossing type", w.Code, w.Body.String())
 	}
-	if w := x.call(t, "POST", "/v1/datasets/"+created.DatasetID+"/objects/"+typeID, carol,
-		`{"fields":{"photo":{"type":"media","value":"`+x.aliceStore+`//`+loose+`"}}}`, nil); w.Code != 201 {
-		t.Fatal("could not write the crossing reference", w.Code, w.Body.String())
+	records := "/v1/datasets/" + created.DatasetID + "/objects/" + typeID
+	if w := x.call(t, "POST", records, carol,
+		`{"fields":{"photo":{"type":"media","value":"`+x.aliceStore+`//`+loose+`"}}}`, nil); w.Code != 403 {
+		t.Fatal("cross-dataset write was not refused", w.Code)
+	}
+	createdRecord := x.call(t, "POST", records, carol, `{"fields":{}}`, nil)
+	var inserted struct{ Objects []struct{ ID string } }
+	if createdRecord.Code != 201 || json.Unmarshal(createdRecord.Body.Bytes(), &inserted) != nil || len(inserted.Objects) != 1 {
+		t.Fatal("could not create the legacy fixture record")
+	}
+	access, err := x.runtime.Authority.Authenticate(t.Context(), carol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed the old attachment index entry that the visibility query reads.
+	if err = x.runtime.Engine.WithTx(t.Context(), access, created.DatasetID, func(_ store.Tx, tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO "tessera_attachments" ("dataset_id","object_id","type_id","field_id","store_id","item_id")
+			VALUES ($1,$2,$3,'photo',$4,$5)`, created.DatasetID, inserted.Objects[0].ID, typeID, x.aliceStore, loose)
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	// A guest sharing that type of Alice's, and holding nothing of Carol's.
