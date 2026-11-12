@@ -21,7 +21,7 @@ func (t *transaction) scanSorted(typeID string, predicate *p.Predicate, sc reach
 	// A write lays its own changes over storage, and a source ordering
 	// storage alone would put a record this write changed where its old value
 	// sorted. Reads only.
-	if t.engine.sorted == nil || t.originals != nil || t.dirty {
+	if t.engine.sorted == nil || t.originals != nil || t.dirty || t.auth.View.HasCollectionReads() && !t.auth.View.Full() {
 		return nil, false, nil
 	}
 	readable, err := t.readable(typeID, predicate, sc)

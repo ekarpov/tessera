@@ -37,7 +37,7 @@ func tesseraFixture(t *testing.T) (*memory.Store, http.Handler, string) {
 	}
 	return s, h, "/v1/datasets/" + held[0].ID
 }
-func wireCall(t *testing.T, h http.Handler, method, path, token, body string, status int) []byte {
+func wireCall(t testing.TB, h http.Handler, method, path, token, body string, status int) []byte {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+token)

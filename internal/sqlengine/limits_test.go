@@ -231,3 +231,71 @@ func TestTheRequestBoundIsTheWidestCommittedWhateverTheOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestCreatorFieldsKeepTheirRequiredTextBound(t *testing.T) {
+	for _, engine := range []string{"sqlite", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			var s *Store
+			if engine == "postgres" {
+				postgresAdmin(t)
+				s = postgresFixture(t)
+			} else {
+				s, _, _ = fixture(t)
+			}
+			made, err := s.CreateDataset(t.Context(), owner, "Synthetic", p.Limits{}, nil, "", [32]byte{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataset := made.DatasetID
+			limits, err := s.DatasetLimits(t.Context(), dataset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const typ = "test.attributed"
+			define := func() error {
+				return s.Transact(t.Context(), owner, dataset, func(tx store.Tx) error {
+					_, err := tx.CreateMetadata(p.Meta{ID: typ, Fields: []p.Field{
+						{ID: "created_by", MetaID: typ, Type: p.TextType, Creator: true},
+					}})
+					return err
+				})
+			}
+			limits.MaxTextBytes = p.CreatorIDBytes - 1
+			if err = s.SetDatasetLimits(t.Context(), dataset, limits); err != nil {
+				t.Fatal(err)
+			}
+			if err = define(); p.ErrorCode(err) != "not_supported" {
+				t.Fatal("a declaration below the minimum was accepted", err)
+			}
+			limits.MaxTextBytes++
+			if err = s.SetDatasetLimits(t.Context(), dataset, limits); err != nil {
+				t.Fatal(err)
+			}
+			if err = define(); err != nil {
+				t.Fatal(err)
+			}
+			limits.MaxTextBytes--
+			if err = s.SetDatasetLimits(t.Context(), dataset, limits); p.ErrorCode(err) != "conflict" {
+				t.Fatal("an existing creator field lost its required text bound", err)
+			}
+			if err = s.Transact(t.Context(), owner, dataset, func(tx store.Tx) error {
+				set, err := tx.Insert(typ, nil)
+				if err != nil {
+					return err
+				}
+				atBound := limits
+				atBound.MaxTextBytes++
+				if err = set.Validate(dataset, atBound); err != nil {
+					return err
+				}
+				_, _, err = tx.DeleteMetadata(typ, true)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.SetDatasetLimits(t.Context(), dataset, limits); err != nil {
+				t.Fatal("a removed creator field still blocked lowering the bound", err)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,7 +205,7 @@ func (s *Store) ContentControl(ctx context.Context, a store.Access, action, stor
 			if _, _, err = s.contentAuthority(ctx, tx, a, current); err != nil {
 				continue
 			}
-			stores = append(stores, map[string]any{"id": current, "dataset_id": dataset, "replaced_store_id": replaced, "capabilities": contentCapabilities, "transfer_modes": []string{"offset"}, "access": map[string]bool{"read": auth.Grants.Read, "write": auth.Grants.Write && auth.View.Full(), "delete": auth.Grants.Erase && auth.View.Full()}, "limits": map[string]int64{"max_item_bytes": maxItemBytes, "max_chunk_bytes": maxChunkBytes, "min_chunk_bytes": minChunkBytes, "url_lifetime_seconds": uriLifetime, "import_idle_seconds": contentIdle, "import_retention_seconds": 86400, "max_content_bytes": 1 << 30, "max_open_imports": 64}})
+			stores = append(stores, map[string]any{"id": current, "dataset_id": dataset, "replaced_store_id": replaced, "capabilities": contentCapabilities, "transfer_modes": []string{"offset"}, "access": map[string]bool{"read": auth.Grants.Read, "write": auth.Grants.Write && auth.View.Full(), "delete": auth.Grants.Erase && auth.View.Full(), "scoped_write": auth.View.AllowsScopedAttachmentUpload(auth.Grants)}, "limits": map[string]int64{"max_item_bytes": maxItemBytes, "max_chunk_bytes": maxChunkBytes, "min_chunk_bytes": minChunkBytes, "url_lifetime_seconds": uriLifetime, "import_idle_seconds": contentIdle, "import_retention_seconds": 86400, "max_content_bytes": 1 << 30, "max_open_imports": 64}})
 		}
 		result = map[string]any{"stores": stores}
 	} else {
@@ -214,9 +215,9 @@ func (s *Store) ContentControl(ctx context.Context, a store.Access, action, stor
 		}
 		switch action {
 		case "begin":
-			result, err = s.beginImport(ctx, tx, a, auth, storeID, body)
+			result, err = s.beginImport(ctx, tx, a, auth, owning, storeID, body)
 		case "commit", "abort":
-			result, err = s.finishImport(ctx, tx, a, auth, storeID, id, action)
+			result, err = s.finishImport(ctx, tx, a, auth, owning, storeID, id, action)
 		case "inspect", "resolve", "delete":
 			result, err = s.contentItem(ctx, tx, a, auth, owning, storeID, id, action, body)
 		case "erase":
@@ -250,19 +251,35 @@ func (s *Store) ContentControl(ctx context.Context, a store.Access, action, stor
 	}
 	return result, nil
 }
-func (s *Store) beginImport(ctx context.Context, tx *sql.Tx, a store.Access, auth store.Authorization, storeID string, body []byte) (any, error) {
-	if !auth.Grants.Write || !auth.View.Full() {
-		return nil, store.Refuse("permission_denied")
-	}
+func (s *Store) beginImport(ctx context.Context, tx *sql.Tx, a store.Access, auth store.Authorization, dataset, storeID string, body []byte) (any, error) {
 	var request struct {
-		Operation   string `json:"operation_id"`
-		ContentType string `json:"content_type"`
-		Bytes       *int64 `json:"byte_count,omitempty"`
-		Maximum     int64  `json:"maximum_bytes"`
-		Mode        string `json:"transfer_mode,omitempty"`
+		Operation   string              `json:"operation_id"`
+		ContentType string              `json:"content_type"`
+		Bytes       *int64              `json:"byte_count,omitempty"`
+		Maximum     int64               `json:"maximum_bytes"`
+		Mode        string              `json:"transfer_mode,omitempty"`
+		Target      *p.AttachmentTarget `json:"attachment_target,omitempty"`
 	}
 	if err := p.DecodeRequest(body, &request, 4096); err != nil {
 		return nil, err
+	}
+	var target sql.NullString
+	if request.Target == nil {
+		if !auth.Grants.Write || !auth.View.Full() {
+			return nil, store.Refuse("permission_denied")
+		}
+	} else {
+		if err := request.Target.Validate(); err != nil {
+			return nil, err
+		}
+		raw, err := p.MarshalWire(*request.Target)
+		if err != nil {
+			return nil, err
+		}
+		target = sql.NullString{String: string(raw), Valid: true}
+		if err = s.authorizeScopedUpload(ctx, tx, a, dataset, target.String); err != nil {
+			return nil, err
+		}
 	}
 	// A zero ceiling is legitimate: it is how an empty item is reserved, and
 	// zero is the one total that no completing range can ever establish, so it
@@ -277,15 +294,16 @@ func (s *Store) beginImport(ctx context.Context, tx *sql.Tx, a store.Access, aut
 		return nil, store.Refuse("not_supported")
 	}
 	var upload, state, owner, authorizationID, contentType string
+	var existingTarget sql.NullString
 	var declared sql.NullInt64
 	var maximum, received, updated int64
 	var item sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT "upload_id","state","principal","authorization","content_type","declared_bytes","maximum_bytes","received_bytes","item_id","updated_at" FROM "tessera_imports" WHERE "store_id"=$1 AND "operation_id"=$2`, storeID, request.Operation).Scan(&upload, &state, &owner, &authorizationID, &contentType, &declared, &maximum, &received, &item, &updated)
+	err := tx.QueryRowContext(ctx, `SELECT "upload_id","state","principal","authorization","content_type","declared_bytes","maximum_bytes","received_bytes","item_id","updated_at","attachment_target" FROM "tessera_imports" WHERE "store_id"=$1 AND "operation_id"=$2`, storeID, request.Operation).Scan(&upload, &state, &owner, &authorizationID, &contentType, &declared, &maximum, &received, &item, &updated, &existingTarget)
 	if err == nil {
 		if a.Principal != owner || a.Authorization != authorizationID {
 			return nil, store.Refuse("permission_denied")
 		}
-		if contentType != request.ContentType || maximum != request.Maximum || declared.Valid != (request.Bytes != nil) || (declared.Valid && declared.Int64 != *request.Bytes) {
+		if existingTarget != target || contentType != request.ContentType || maximum != request.Maximum || declared.Valid != (request.Bytes != nil) || (declared.Valid && declared.Int64 != *request.Bytes) {
 			return nil, store.Refuse("conflict")
 		}
 		if state == "committed" {
@@ -311,7 +329,7 @@ func (s *Store) beginImport(ctx context.Context, tx *sql.Tx, a store.Access, aut
 			return nil, err
 		}
 		upload = "u-" + upload
-		_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_imports" ("upload_id","store_id","operation_id","principal","authorization","content_type","declared_bytes","total_bytes","maximum_bytes","state","updated_at") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10)`, upload, storeID, request.Operation, a.Principal, a.Authorization, request.ContentType, request.Bytes, request.Bytes, request.Maximum, time.Now().UnixMilli())
+		_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_imports" ("upload_id","store_id","operation_id","principal","authorization","content_type","declared_bytes","total_bytes","maximum_bytes","state","updated_at","attachment_target") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open',$10,$11)`, upload, storeID, request.Operation, a.Principal, a.Authorization, request.ContentType, request.Bytes, request.Bytes, request.Maximum, time.Now().UnixMilli(), target)
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
@@ -328,22 +346,29 @@ func (s *Store) beginImport(ctx context.Context, tx *sql.Tx, a store.Access, aut
 	result["transfer_mode"] = "offset"
 	return result, nil
 }
-func (s *Store) finishImport(ctx context.Context, tx *sql.Tx, a store.Access, auth store.Authorization, storeID, id, action string) (any, error) {
-	if !auth.Grants.Write || !auth.View.Full() {
-		return nil, store.Refuse("permission_denied")
-	}
+func (s *Store) finishImport(ctx context.Context, tx *sql.Tx, a store.Access, auth store.Authorization, dataset, storeID, id, action string) (any, error) {
 	var principal, authorizationID, state, contentType string
-	var item sql.NullString
+	var item, target sql.NullString
 	var total sql.NullInt64
 	var received, updated int64
-	err := tx.QueryRowContext(ctx, `SELECT "principal","authorization","state","item_id","total_bytes","received_bytes","content_type","updated_at" FROM "tessera_imports" WHERE "store_id"=$1 AND "upload_id"=$2`, storeID, id).Scan(&principal, &authorizationID, &state, &item, &total, &received, &contentType, &updated)
+	err := tx.QueryRowContext(ctx, `SELECT "principal","authorization","state","item_id","total_bytes","received_bytes","content_type","updated_at","attachment_target" FROM "tessera_imports" WHERE "store_id"=$1 AND "upload_id"=$2`, storeID, id).Scan(&principal, &authorizationID, &state, &item, &total, &received, &contentType, &updated, &target)
 	if err == sql.ErrNoRows {
+		if !auth.Grants.Write || !auth.View.Full() {
+			return nil, store.Refuse("permission_denied")
+		}
 		return nil, store.Refuse("not_found")
 	}
 	if err != nil {
 		return nil, dbError(ctx, err)
 	}
 	if principal != a.Principal || authorizationID != a.Authorization {
+		return nil, store.Refuse("permission_denied")
+	}
+	if target.Valid {
+		if err = s.authorizeScopedUpload(ctx, tx, a, dataset, target.String); err != nil {
+			return nil, err
+		}
+	} else if !auth.Grants.Write || !auth.View.Full() {
 		return nil, store.Refuse("permission_denied")
 	}
 	if state == "committed" {
@@ -383,25 +408,49 @@ func (s *Store) contentItem(ctx context.Context, tx *sql.Tx, a store.Access, aut
 		return nil, store.Refuse("permission_denied")
 	}
 	if !auth.View.Full() {
-		// Constrained to the dataset the store belongs to. A record in another
-		// dataset may hold a reference to this item — the reference names a
-		// store and an item, and nothing stops one crossing — and without this
-		// the row it writes here was read as if it were one of this dataset's
-		// own. A share of one dataset then let its type allowance be applied
-		// to an object in a dataset the reader cannot reach at all, which
-		// turned somebody else's record into a key to these bytes.
-		rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id" FROM "tessera_attachments" WHERE "dataset_id"=$1 AND "store_id"=$2 AND "item_id"=$3`, owning, storeID, id)
+		// Legacy links may cross datasets. Check the attachment's dataset
+		// before applying a grant on its type or object identity.
+		query := `SELECT a."object_id",a."type_id" FROM "tessera_attachments" a`
+		var types map[string]p.Meta
+		if auth.View.HasCollectionReads() {
+			h, err := s.load(ctx, tx, a, owning, false)
+			if err != nil {
+				return nil, err
+			}
+			types = h.image.Types
+			query = `SELECT a."object_id",a."type_id",o."fields" FROM "tessera_attachments" a JOIN ` +
+				h.managed.source + ` AS o ON o."dataset_id"=a."dataset_id" AND o."object_id"=a."object_id" AND o."type_id"=a."type_id"`
+		}
+		rows, err := tx.QueryContext(ctx, query+` WHERE a."dataset_id"=$1 AND a."store_id"=$2 AND a."item_id"=$3`, owning, storeID, id)
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
 		visible := false
 		for rows.Next() {
 			var k store.ObjectKey
-			if err = rows.Scan(&k.ObjectID, &k.TypeID); err != nil {
+			var raw []byte
+			if types != nil {
+				err = rows.Scan(&k.ObjectID, &k.TypeID, &raw)
+			} else {
+				err = rows.Scan(&k.ObjectID, &k.TypeID)
+			}
+			if err != nil {
 				break
 			}
 			if recordstate.Visible(auth.View, k.TypeID, k.ObjectID) {
 				visible = true
+				break
+			}
+			if types != nil && auth.View.AllowsQueryType(k.TypeID) {
+				var row recordstate.Row
+				if err = decodeStoredFields(raw, &row); err != nil {
+					break
+				}
+				sequence, _ := strconv.ParseUint(k.ObjectID, 10, 64)
+				if auth.View.AllowsCollectionRecord(k, sequence, recordstate.CollectionID(types, k.TypeID, row.Fields)) {
+					visible = true
+					break
+				}
 			}
 		}
 		if err == nil {
@@ -539,7 +588,7 @@ func (s *Store) byteDirectory() string {
 // contentCapabilities is what this store advertises. Resolve checks a requested
 // representation against exactly this list, so a capability cannot be refused
 // as missing on one path while being advertised on another.
-var contentCapabilities = []string{"writes", "thumbnails"}
+var contentCapabilities = []string{"writes", "thumbnails", "scoped_attachment_writes"}
 
 func (s *Store) advertisesContentCapability(name string) bool {
 	for _, advertised := range contentCapabilities {

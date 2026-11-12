@@ -97,8 +97,8 @@ bytes using `protocol.MarshalWire`. A server suite cannot catch loss in a client
 
 Review workflows, purpose-scoped consent, ownership transfer, cross-service cleanup and
 vocabulary interpretation remain host responsibilities. Storage grants do not encode a
-purpose or a subject. Sharing is read-only and scoped to exact concrete types or objects;
-there is no arbitrary guest-write policy hook. See the
+purpose or a subject. Read grants cover exact concrete types, collections or objects.
+Insert grants cover exact concrete types or collections. See the
 [embedding contract](../specs/tessera-embedding.md) for required host guarantees.
 
 ## Current limits

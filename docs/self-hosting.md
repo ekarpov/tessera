@@ -669,7 +669,9 @@ echo '{"max_stored_bytes": 2147483648}' > raise.json
 ./tesserad -config /etc/tessera/server.json -set-dataset-limits s-7f3a9c21b04e4d1789ab -limits-file raise.json
 ```
 
-`idempotency_retention_seconds` may only grow. How full each dataset is shows on `/admin`. Every
+`idempotency_retention_seconds` may only grow. A dataset with creator fields must retain at least
+32 bytes of text capacity. Lowering `max_text_bytes` below that returns `409 conflict` with
+`details.reason: "creator_text_limit"`. How full each dataset is shows on `/admin`. Every
 change takes effect at once, without a restart.
 
 ## Sizing
@@ -1064,6 +1066,10 @@ naming `not_supported`, and leaves the schema untouched — so rolling the binar
 recovers the deployment without a restore. That refusal is deliberate and tested: operating on a
 schema the binary does not understand fails silently, while refusing does not. Plan a rollback as
 "restore the backup taken before the upgrade", never as "start the old binary".
+
+Stop all previous-version writers before migrating. A writer already connected to PostgreSQL
+can continue using the old schema rules until it stops. In particular, creator attribution depends
+on every writer enforcing creator fields.
 
 Stop the server before provisioning, backup, restore or reset commands; they take the same database.
 A migration that fails leaves the transaction rolled back and the server refusing to start, which is

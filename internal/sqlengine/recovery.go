@@ -121,9 +121,9 @@ func (s *Store) Status(ctx context.Context, a store.Access, dataset, key string)
 	if !found {
 		return store.Receipt{State: "unknown"}, nil
 	}
-	return receiptView(ctx, tx, a, r)
+	return s.receiptView(ctx, tx, a, r)
 }
-func receiptView(ctx context.Context, tx *sql.Tx, a store.Access, r retained) (store.Receipt, error) {
+func (s *Store) receiptView(ctx context.Context, tx *sql.Tx, a store.Access, r retained) (store.Receipt, error) {
 	if a != r.owner {
 		return store.Receipt{}, store.Refuse("permission_denied")
 	}
@@ -171,6 +171,12 @@ func receiptView(ctx context.Context, tx *sql.Tx, a store.Access, r retained) (s
 				}
 			}
 		}
+		if !visible && r.scope == "created" && err == nil && live > 0 && g.Grants.Read && g.View.HasCollectionReads() {
+			visible, err = s.readableCollectionReceipt(ctx, tx, a, r.dataset, result.Objects)
+			if err != nil {
+				return result, err
+			}
+		}
 		if visible {
 			result.Result = append([]byte(nil), r.body...)
 			result.Objects = nil
@@ -182,7 +188,44 @@ func receiptView(ctx context.Context, tx *sql.Tx, a store.Access, r retained) (s
 		return result, store.Refuse("internal_error")
 	}
 }
-func replayView(ctx context.Context, tx *sql.Tx, a store.Access, r retained, digest [32]byte) (store.Reply, error) {
+
+// Only insert-only receipts can be proved readable from their created
+// identities. A mixed response may describe records or schema not named there.
+func (s *Store) readableCollectionReceipt(ctx context.Context, tx *sql.Tx, a store.Access, dataset string, objects []p.Reference) (bool, error) {
+	if len(objects) == 0 {
+		return false, nil
+	}
+	h, err := s.load(ctx, tx, a, dataset, false)
+	if err != nil {
+		switch p.ErrorCode(err) {
+		case "unavailable", "not_found", "permission_denied":
+			return false, nil
+		default:
+			return false, err
+		}
+	}
+	view := h.auth.View
+	if !h.auth.Grants.Read {
+		return false, nil
+	}
+	for _, ref := range objects {
+		if ref.DatasetID != dataset {
+			return false, nil
+		}
+		row, ok, err := fetchRow(ctx, tx, h.managed.source, dataset, ref.ObjectID)
+		if err != nil {
+			return false, err
+		}
+		key := store.ObjectKey{TypeID: ref.MetaID, ObjectID: ref.ObjectID}
+		if !ok || row.TypeID != ref.MetaID || (!view.AllowsSequence(key, row.Sequence) &&
+			!view.AllowsCollectionRecord(key, row.Sequence, recordstate.CollectionID(h.image.Types, row.TypeID, row.Fields))) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *Store) replayView(ctx context.Context, tx *sql.Tx, a store.Access, r retained, digest [32]byte) (store.Reply, error) {
 	if a != r.owner {
 		return store.Reply{}, store.Refuse("permission_denied")
 	}
@@ -192,7 +235,7 @@ func replayView(ctx context.Context, tx *sql.Tx, a store.Access, r retained, dig
 	if r.state == "in_progress" {
 		return store.Reply{}, &p.Error{Code: "conflict", Message: "Operation is unresolved", Details: map[string]any{"state": "in_progress"}}
 	}
-	view, err := receiptView(ctx, tx, a, r)
+	view, err := s.receiptView(ctx, tx, a, r)
 	if err != nil {
 		return store.Reply{}, err
 	}
@@ -222,7 +265,7 @@ func (s *Store) Replay(ctx context.Context, a store.Access, dataset, key string,
 	if err != nil || !found {
 		return store.Reply{}, found, err
 	}
-	reply, err := replayView(ctx, tx, a, r, digest)
+	reply, err := s.replayView(ctx, tx, a, r, digest)
 	return reply, true, err
 }
 func (s *Store) Mutate(ctx context.Context, a store.Access, m store.Mutation) (store.Reply, error) {
@@ -351,7 +394,7 @@ func (s *Store) claim(ctx context.Context, a store.Access, m store.Mutation) (st
 		return store.Reply{}, false, err
 	}
 	if found {
-		reply, e := replayView(ctx, tx, a, r, m.Digest)
+		reply, e := s.replayView(ctx, tx, a, r, m.Digest)
 		return reply, true, e
 	}
 	h, err := s.load(ctx, tx, a, m.Dataset, false)
@@ -366,7 +409,7 @@ func (s *Store) claim(ctx context.Context, a store.Access, m store.Mutation) (st
 	if err = engine.Transact(ctx, a, m.Dataset, func(core store.Tx) error { return store.AuthorizeTransaction(core, m.Transaction) }); err != nil {
 		return store.Reply{}, false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_receipts" ("key","dataset_id","principal","authorization","digest","claimed_at","state","watermark","replay_scope","executor_id") VALUES ($1,$2,$3,$4,$5,$6,'in_progress',$7,$8,$9)`, m.Key, m.Dataset, a.Principal, a.Authorization, m.Digest[:], time.Now().UnixMilli(), image.Watermark, replayScope(m.Transaction), s.executor)
+	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_receipts" ("key","dataset_id","principal","authorization","digest","claimed_at","state","watermark","replay_scope","executor_id") VALUES ($1,$2,$3,$4,$5,$6,'in_progress',$7,$8,$9)`, m.Key, m.Dataset, a.Principal, a.Authorization, m.Digest[:], time.Now().UnixMilli(), image.Watermark, replayScope(m.Transaction, !h.auth.Grants.Write), s.executor)
 	if err != nil {
 		return store.Reply{}, false, dbError(ctx, err)
 	}
@@ -392,7 +435,7 @@ func (s *Store) failClaim(ctx context.Context, a store.Access, m store.Mutation,
 		return store.Reply{}, store.Refuse("internal_error")
 	}
 	if r.state != "in_progress" {
-		return replayView(ctx, tx, a, r, m.Digest)
+		return s.replayView(ctx, tx, a, r, m.Digest)
 	}
 	reply := store.FailureReply(cause)
 	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_receipts" SET "state"='failed',"status"=$1,"body"=$2 WHERE "key"=$3 AND "dataset_id"=$4 AND "state"='in_progress'`, reply.Status, []byte(reply.Body), m.Key, m.Dataset); err != nil {
@@ -455,7 +498,14 @@ func replyWatermark(raw []byte) string {
 	return body.Watermark
 }
 
-func replayScope(t p.Transaction) string {
+func replayScope(t p.Transaction, scoped bool) string {
+	inserts := len(t.Operations) > 0
+	for _, op := range t.Operations {
+		inserts = inserts && op.Op == "insert"
+	}
+	if inserts {
+		return "created"
+	}
 	schema, deleted := true, true
 	for _, op := range t.Operations {
 		switch op.Op {
@@ -463,6 +513,11 @@ func replayScope(t p.Transaction) string {
 			deleted = false
 		case "delete_type":
 		case "delete", "delete_where":
+			schema = false
+		case "update":
+			if !scoped {
+				return "read"
+			}
 			schema = false
 		default:
 			return "read"

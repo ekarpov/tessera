@@ -17,9 +17,17 @@ var OptionalReadCapabilities = []string{}
 // server doing another.
 var RetiredReadCapabilities = []string{"aggregation", "distinct_references", "text_matching"}
 
-// DatasetCapabilities are every capability name a server may advertise for a
-// dataset: the optional reads, plus the two features that are not reads at all
-// and that no client can compensate for.
+// CreatorAttributionCapability enables server-populated creator fields.
+const CreatorAttributionCapability = "creator_attribution"
+
+const CollectionAccessCapability = "collection_access"
+
+const CreatorScopedMutationsCapability = "creator_scoped_mutations"
+
+// CreatorIDBytes is the encoded size of a dataset-scoped creator ID.
+const CreatorIDBytes = 32
+
+// DatasetCapabilities are every capability name a server may advertise for a dataset.
 //
 // It exists so there is one list rather than one per surface. The
 // administration page kept a copy of its own, the three retired names stayed
@@ -27,9 +35,9 @@ var RetiredReadCapabilities = []string{"aggregation", "distinct_references", "te
 // telling an operator this deployment withheld three things the protocol no
 // longer lets anyone decline.
 func DatasetCapabilities() []string {
-	names := make([]string, 0, len(OptionalReadCapabilities)+2)
+	names := make([]string, 0, len(OptionalReadCapabilities)+5)
 	names = append(names, OptionalReadCapabilities...)
-	return append(names, "content", "sharing")
+	return append(names, "content", "sharing", CreatorAttributionCapability, CollectionAccessCapability, CreatorScopedMutationsCapability)
 }
 
 // DatasetCreationCapability says that the creation route exists on this

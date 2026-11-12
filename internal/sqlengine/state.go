@@ -41,10 +41,10 @@ type held struct {
 func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset string, objects bool) (held, error) {
 	h := held{image: recordstate.Image{Types: map[string]p.Meta{}, Objects: map[string]recordstate.Row{}}}
 	image := &h.image
-	var secret, bounds []byte
+	var secret, creatorSecret, bounds []byte
 	var next string
 	var schemaKey, managedKey sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret","next_id","watermark","limits","schema_cache_key","managed_key" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &next, &image.Watermark, &bounds, &schemaKey, &managedKey)
+	err := tx.QueryRowContext(ctx, `SELECT "dataset_id","secret",coalesce("creator_secret","secret"),"next_id","watermark","limits","schema_cache_key","managed_key" FROM "tessera_dataset" WHERE "dataset_id"=$1`, dataset).Scan(&image.ID, &secret, &creatorSecret, &next, &image.Watermark, &bounds, &schemaKey, &managedKey)
 	if err == sql.ErrNoRows {
 		// not_found means proven retirement and nothing else. Without evidence
 		// in the retirement ledger this identity may name a dataset that never
@@ -78,10 +78,11 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 		return h, store.Refuse("internal_error")
 	}
 	image.Next, err = strconv.ParseUint(next, 10, 64)
-	if err != nil || len(secret) != 32 {
+	if err != nil || len(secret) != 32 || len(creatorSecret) != 32 {
 		return h, store.Refuse("internal_error")
 	}
 	copy(image.Secret[:], secret)
+	copy(image.CreatorSecret[:], creatorSecret)
 	cached, hit := s.schemas.get(schemaKey.String)
 	size := cached.bytes
 	if !hit {
@@ -141,6 +142,9 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	}
 	if h.managed, err = s.loadManaged(ctx, tx, dataset, managedKey.String, cacheKey, image.Types); err != nil {
 		return h, err
+	}
+	if h.auth.View.HasCollectionReads() && !h.auth.View.Full() {
+		h.managed.collections = &collectionScan{view: h.auth.View, types: image.Types}
 	}
 	if !objects {
 		return h, nil
@@ -251,6 +255,11 @@ func (s *Store) persist(ctx context.Context, tx *sql.Tx, limits p.Limits, before
 		}
 		if err = s.persistManagedRecord(ctx, tx, dataset, id, managed[row.TypeID], old.Fields, row.Fields, ok); err != nil {
 			return err
+		}
+		if creator := after.NewContributions[id]; !ok && creator != "" {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO "tessera_contributions" ("dataset_id","object_id","creator_id") VALUES ($1,$2,$3)`, dataset, id, creator); err != nil {
+				return dbError(ctx, err)
+			}
 		}
 	}
 	for id := range before.Objects {

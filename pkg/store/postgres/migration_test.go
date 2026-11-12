@@ -21,6 +21,7 @@ import (
 // the forward migration drops by name, so they have to be restored exactly.
 var singletonSchema = []string{
 
+	`ALTER TABLE "tessera_imports" DROP COLUMN "attachment_target"`, `DROP TABLE "tessera_contributions"`, `DROP TABLE "tessera_contribution_erasure"`,
 	`DROP VIEW "tessera_read_objects"`,
 	`DROP VIEW "tessera_all_field_values"`,
 	`DROP TABLE "tessera_managed_installations"`,
@@ -63,6 +64,7 @@ var singletonSchema = []string{
 	`ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,
 	`DROP TABLE "tessera_page_rows"`,
 	`ALTER TABLE "tessera_pages" DROP COLUMN "position"`,
+	`ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`,
 	`UPDATE "tessera_migration" SET "version"=4`,
 }
 

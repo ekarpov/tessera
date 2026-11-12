@@ -72,6 +72,7 @@ CREATE TABLE "tessera_imports" (
     "item_id" TEXT,
     "updated_at" BIGINT NOT NULL,
     "cleaned" INTEGER NOT NULL DEFAULT 0,
+    "attachment_target" TEXT,
     UNIQUE ("store_id","operation_id")
 );
 
@@ -146,7 +147,8 @@ CREATE TABLE "tessera_dataset" (
     "object_count" INTEGER NOT NULL DEFAULT 0,
     "object_bytes" INTEGER NOT NULL DEFAULT 0,
     "schema_cache_key" TEXT,
-    "managed_key" TEXT);
+    "managed_key" TEXT,
+    "creator_secret" BLOB CHECK (length("creator_secret") = 32));
 
 CREATE INDEX "tessera_receipts_executor" ON "tessera_receipts" ("state","executor_id");
 
@@ -192,4 +194,20 @@ CREATE TABLE "tessera_managed_installations" (
     FOREIGN KEY ("dataset_id", "type_id") REFERENCES "tessera_types" ON DELETE CASCADE
 );
 
-PRAGMA user_version = 18;
+CREATE TABLE "tessera_contributions" (
+    "dataset_id" TEXT NOT NULL,
+    "object_id" TEXT NOT NULL,
+    "creator_id" TEXT NOT NULL,
+    PRIMARY KEY ("dataset_id","object_id"),
+    FOREIGN KEY ("dataset_id","object_id") REFERENCES "tessera_objects" ("dataset_id","object_id") ON DELETE CASCADE
+);
+CREATE INDEX "tessera_contributions_creator" ON "tessera_contributions" ("dataset_id","creator_id","object_id");
+CREATE TABLE "tessera_contribution_erasure" (
+    "dataset_id" TEXT NOT NULL,
+    "creator_id" TEXT NOT NULL,
+    "job_id" TEXT NOT NULL UNIQUE,
+    "done" INTEGER NOT NULL DEFAULT 0 CHECK ("done" IN (0,1)),
+    PRIMARY KEY ("dataset_id","creator_id")
+);
+
+PRAGMA user_version = 23;

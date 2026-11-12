@@ -189,7 +189,7 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.refreshManagedViews(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version <= 15 && version > 0 {
+	} else if version <= 16 && version > 0 {
 		// Only pre-v0.1.0 databases need the historical schema steps.
 		historical := [...]string{
 			migrations.SQLiteV2, migrations.SQLiteV3, migrations.SQLiteV4,
@@ -198,8 +198,13 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 			migrations.SQLiteV11, migrations.SQLiteV12, migrations.SQLiteV13,
 			migrations.SQLiteV14, migrations.SQLiteV15,
 		}
-		for _, step := range historical[version-1:] {
+		for _, step := range historical[min(version-1, len(historical)):] {
 			if _, err = tx.ExecContext(ctx, step); err != nil {
+				return nil, dbError(ctx, err)
+			}
+		}
+		if version == 16 {
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_dataset" RENAME COLUMN "creator_secret" TO "legacy_creator_secret"`); err != nil {
 				return nil, dbError(ctx, err)
 			}
 		}
@@ -209,11 +214,37 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 18`); err != nil {
+	} else if version != 18 && version != 19 && version != 20 && version != 21 && version != 22 && version != 23 {
+		return nil, store.Refuse("not_supported")
+	}
+	if version != 0 && version < 19 {
+		if _, err = tx.ExecContext(ctx, migrations.SQLiteCreatorUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version != 18 {
-		return nil, store.Refuse("not_supported")
+		if version == 16 {
+			if err = carryCreatorSecret(ctx, tx); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if version != 0 && version < 22 {
+		if _, err = tx.ExecContext(ctx, migrations.ContributionUpgrade); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.backfillContributions(ctx, tx); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 22`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version != 0 && version < 23 {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_imports" ADD COLUMN "attachment_target" TEXT`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 23`); err != nil {
+			return nil, dbError(ctx, err)
+		}
 	}
 	var bounds p.Limits
 	if bounds, err = storageLimits(ctx, tx); err != nil {
@@ -333,6 +364,17 @@ func (s *Store) SetAuthorization(ctx context.Context, dataset string, a store.Ac
 	if live == 0 {
 		return store.Refuse("not_found")
 	}
+	creator, err := contributionCreator(ctx, tx, dataset, a.Principal)
+	if err != nil {
+		return err
+	}
+	var erased int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_contribution_erasure" WHERE "dataset_id"=$1 AND "creator_id"=$2`, dataset, creator).Scan(&erased); err != nil {
+		return dbError(ctx, err)
+	}
+	if erased != 0 {
+		return store.Refuse("permission_denied")
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO "tessera_access" ("dataset_id","principal","authorization","grants","generation","view") VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT ("dataset_id","principal","authorization") DO UPDATE SET "grants"=excluded."grants","generation"=excluded."generation","view"=excluded."view"`, dataset, a.Principal, a.Authorization, raw, generation, view)
 	if err != nil {
 		return dbError(ctx, err)
@@ -347,7 +389,18 @@ func (s *Store) Revoke(ctx context.Context, dataset string, a store.Access) erro
 		return err
 	}
 	defer s.life.RUnlock()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM "tessera_access" WHERE "dataset_id"=$1 AND "principal"=$2 AND "authorization"=$3`, dataset, a.Principal, a.Authorization); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return dbError(ctx, err)
+	}
+	defer tx.Rollback()
+	if err = s.serializeWrites(ctx, tx, dataset); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM "tessera_access" WHERE "dataset_id"=$1 AND "principal"=$2 AND "authorization"=$3`, dataset, a.Principal, a.Authorization); err != nil {
+		return dbError(ctx, err)
+	}
+	if err = tx.Commit(); err != nil {
 		return dbError(ctx, err)
 	}
 	return nil
@@ -375,7 +428,7 @@ func authorization(ctx context.Context, tx *sql.Tx, dataset string, a store.Acce
 	if json.Unmarshal(view, &v) != nil {
 		return store.Authorization{}, store.Refuse("internal_error")
 	}
-	return store.Authorization{Grants: g, View: v}, nil
+	return store.Authorization{Grants: g, View: v.WithCollectionRights(g)}, nil
 }
 
 // Datasets lists every dataset in this storage that the caller holds a grant
@@ -595,7 +648,9 @@ func (s *Store) read(ctx context.Context, a store.Access, dataset string, object
 		return err
 	}
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, tx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, tx, a, dataset, ref, target)
+		})
 	}
 	if !objects {
 		// Built without the records, so a request for one by identity reads
@@ -657,6 +712,9 @@ func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string
 		identity = `"object_id" COLLATE "C"`
 	}
 	scope := `"dataset_id"=$1 AND "type_id" IN (` + strings.Join(placeholders, ",") + ")"
+	if managed.collections != nil {
+		scope += managed.collections.condition(types, managed.values, &args)
+	}
 	for _, predicate := range predicates {
 		table, column, where := managed.values+" AS v", `"number"`, `"dataset_id"=$1 AND "kind"='integer'`
 		if layout, fieldColumn, ok := managed.mapping.field(types, predicate.Field, p.IntegerType); ok {
@@ -765,7 +823,9 @@ func (s *Store) evaluate(ctx context.Context, sqltx *sql.Tx, a store.Access, dat
 		return err
 	}
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, sqltx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, sqltx, a, dataset, ref, target)
+		})
 	}
 	if err = engine.Transact(ctx, a, dataset, func(tx store.Tx) error { return fn(tx, sqltx) }); err != nil {
 		return err
@@ -816,7 +876,9 @@ func (s *Store) evaluateSourced(ctx context.Context, sqltx *sql.Tx, a store.Acce
 	})
 	engine.EnableSourcedWrites()
 	if s.contentDir != "" {
-		engine.SetMediaAuthority(func(ref string) error { return s.authorizeAttachment(ctx, sqltx, a, ref) })
+		engine.SetMediaAuthority(func(ref string, target p.AttachmentTarget) error {
+			return s.authorizeAttachment(ctx, sqltx, a, dataset, ref, target)
+		})
 	}
 	failed := engine.Transact(ctx, a, dataset, func(tx store.Tx) error { return fn(tx, sqltx) })
 	if engine.NeededImage() {

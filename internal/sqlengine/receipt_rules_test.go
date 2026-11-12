@@ -116,11 +116,12 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 				}
 			}
 		}
-		m.Tables = m.Tables[:len(m.Tables)-3]
+		m.Tables = m.Tables[:packedArchiveTables-3]
 		for i := range m.Tables {
 			table := &m.Tables[i]
 			switch table.Name {
 			case "tessera_dataset":
+				stripBackupColumn(table, "creator_secret")
 				stripBackupColumn(table, "managed_key")
 			case "tessera_receipts":
 				for _, name := range []string{"retain_until", "executor_id", "watermark", "replay_scope"} {
@@ -136,7 +137,8 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 		`ALTER TABLE "tessera_receipts" DROP COLUMN "watermark"`, `ALTER TABLE "tessera_receipts" DROP COLUMN "replay_scope"`,
 		`ALTER TABLE "tessera_transfer_tokens" DROP COLUMN "representation"`, `ALTER TABLE "tessera_sequences" DROP COLUMN "meta"`,
 		`DROP INDEX "tessera_imports_uncleaned"`, `ALTER TABLE "tessera_imports" DROP COLUMN "cleaned"`,
-		`DROP TABLE "tessera_page_rows"`, `ALTER TABLE "tessera_pages" DROP COLUMN "position"`, `PRAGMA user_version=5`,
+		`DROP TABLE "tessera_page_rows"`, `ALTER TABLE "tessera_pages" DROP COLUMN "position"`,
+		`ALTER TABLE "tessera_dataset" DROP COLUMN "creator_secret"`, `PRAGMA user_version=5`,
 	} {
 		if _, err = s.db.ExecContext(t.Context(), statement); err != nil {
 			t.Fatal(err)

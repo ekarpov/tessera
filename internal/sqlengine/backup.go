@@ -3,6 +3,7 @@ package sqlengine
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -24,7 +25,9 @@ import (
 
 const maxBackupBytes = 256 << 20
 
-var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations"}
+var backupTables = []string{"tessera_dataset", "tessera_types", "tessera_objects", "tessera_access", "tessera_receipts", "tessera_retirements", "tessera_content_stores", "tessera_imports", "tessera_items", "tessera_attachments", "tessera_field_values", "tessera_managed_layouts", "tessera_managed_installations", "tessera_contributions", "tessera_contribution_erasure"}
+
+const packedArchiveTables = 14
 
 type backupValue struct {
 	Bytes   []byte  `json:"bytes,omitempty"`
@@ -251,6 +254,15 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			if s.postgres {
 				query = `SELECT "object_id","type_id","dataset_id","fields" FROM "tessera_read_objects"`
 			}
+		case "tessera_contributions":
+			// The index repeats its dataset and creator for each record. Pack
+			// the object IDs together to avoid materializing that repetition.
+			aggregate := `json_group_array("object_id")`
+			if s.postgres {
+				aggregate = `json_agg("object_id")::text`
+			}
+			query = `SELECT "dataset_id","creator_id",` + aggregate +
+				` AS "object_ids" FROM "tessera_contributions" GROUP BY "dataset_id","creator_id"`
 		case "tessera_field_values":
 			// Retain the archive table inventory. All values now travel with the
 			// object payload, including the managed columns.
@@ -266,12 +278,12 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 			return dbError(ctx, e)
 		}
 		table := backupTable{Name: name, Columns: columns}
+		values := make([]any, len(columns))
+		targets := make([]any, len(values))
+		for i := range values {
+			targets[i] = &values[i]
+		}
 		for rows.Next() {
-			values := make([]any, len(columns))
-			targets := make([]any, len(values))
-			for i := range values {
-				targets[i] = &values[i]
-			}
 			if e = rows.Scan(targets...); e != nil {
 				break
 			}
@@ -294,7 +306,8 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 				case nil:
 					row[i].Kind = "null"
 				case []byte:
-					row[i] = backupValue{Kind: "bytes", Bytes: append([]byte(nil), v...)}
+					// Scan into *any returns an owned copy of driver bytes.
+					row[i] = backupValue{Kind: "bytes", Bytes: v}
 					total += len(v)
 				case string:
 					copy := v
@@ -326,7 +339,14 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 	_ = tx.Rollback()
 	var plain bytes.Buffer
 	archive := zip.NewWriter(&plain)
+	// The manifest is repetitive structured data. Fast DEFLATE avoids spending
+	// the backup window searching for small additional compression gains.
+	archive.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(w, flate.BestSpeed)
+	})
 	entry, err := archive.Create("manifest.json")
+	// Content and host files keep the standard ZIP compression policy.
+	archive.RegisterCompressor(zip.Deflate, nil)
 	if err != nil {
 		return err
 	}
@@ -478,7 +498,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 			}
 		}
 	}
-	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != len(backupTables)-2 && len(manifest.Tables) != len(backupTables)-3) {
+	if !manifestFound || (len(manifest.Tables) != len(backupTables) && len(manifest.Tables) != packedArchiveTables && len(manifest.Tables) != packedArchiveTables-2 && len(manifest.Tables) != packedArchiveTables-3) {
 		return store.Refuse("invalid_field")
 	}
 	fence, err := os.ReadFile(fencePath)
@@ -487,6 +507,9 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	}
 	erasedDatasets, erasedStores, err := retiredInBackup(manifest, fence)
 	if err != nil {
+		return err
+	}
+	if err = checkContributionArchive(manifest, fence, erasedDatasets); err != nil {
 		return err
 	}
 	if _, err = os.Stat(destination); !os.IsNotExist(err) {
@@ -552,7 +575,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	var packedPayloads [][]byte
 	// Packed archives carry the values with their objects and have an empty
 	// field table. Older archives can mix packed and flattened values.
-	packed := len(manifest.Tables) == len(backupTables) &&
+	packed := len(manifest.Tables) >= packedArchiveTables &&
 		len(manifest.Tables[slices.Index(backupTables, "tessera_field_values")].Rows) == 0
 
 	for i, table := range manifest.Tables {
@@ -563,6 +586,26 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		switch table.Name {
 		case "tessera_dataset":
 			stripBackupColumn(&table, "typed_fields")
+			// The creator-only schema predates the managed storage columns.
+			if slices.Contains(table.Columns, "creator_secret") && !slices.Contains(table.Columns, "schema_cache_key") {
+				index := slices.Index(table.Columns, "creator_secret")
+				for i, row := range table.Rows {
+					if len(row) != len(table.Columns) {
+						return store.Refuse("invalid_field")
+					}
+					creator := row[index]
+					row = slices.Delete(row, index, index+1)
+					table.Rows[i] = append(row, nullBackupValue(), nullBackupValue(), creator)
+				}
+				table.Columns = append(slices.Delete(table.Columns, index, index+1), "schema_cache_key", "managed_key", "creator_secret")
+			}
+		case "tessera_contributions":
+			if slices.Equal(table.Columns, []string{"dataset_id", "creator_id", "object_ids"}) {
+				if err = s.restorePackedContributions(ctx, tx, table); err != nil {
+					return err
+				}
+				continue
+			}
 		case "tessera_objects":
 			packed = packed && slices.Contains(table.Columns, "fields") && !slices.Contains(table.Columns, "wire_bytes")
 			legacyPayloads, err = normalizeObjectArchive(&table)
@@ -646,7 +689,11 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 				case "null":
 				case "bytes":
 					// Preserve an empty binary value even when the archive omitted its bytes.
-					values[j] = append([]byte{}, value.Bytes...)
+					body := value.Bytes
+					if body == nil {
+						body = []byte{}
+					}
+					values[j] = body
 				case "text":
 					values[j] = value.Text
 				case "integer":
@@ -682,7 +729,8 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	}
 	// A restored copy is a distinct storage and every dataset in it gets its own
 	// fresh version secret: sharing one across the copy would let a watermark
-	// minted in the original be accepted here.
+	// minted in the original be accepted here. Creator identifiers belong to
+	// the logical dataset and remain stable when its records are restored.
 	// A dataset or content store erased since this backup was taken is
 	// erased again here, in the same transaction that loads it, so what was
 	// erased is never committed and never served. Refusing the whole backup
@@ -696,6 +744,11 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 	// archive from before they were kept has none.
 	if err = s.restoreManagedRows(ctx, tx, packedObjects, packedPayloads); err != nil {
 		return err
+	}
+	if len(manifest.Tables) < len(backupTables) {
+		if err = s.backfillContributions(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err = recount(ctx, tx); err != nil {
 		return err
@@ -750,7 +803,7 @@ func restoreBackup(ctx context.Context, source, destination, contentDir, fencePa
 		if e != nil {
 			return e
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "secret"=$1,"watermark"=$2 WHERE "dataset_id"=$3`, secret[:], "w:"+watermark, id); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "creator_secret"=coalesce("creator_secret","secret"),"secret"=$1,"watermark"=$2 WHERE "dataset_id"=$3`, secret[:], "w:"+watermark, id); err != nil {
 			return dbError(ctx, err)
 		}
 	}
@@ -974,17 +1027,20 @@ func recount(ctx context.Context, tx *sql.Tx) error {
 
 // archiveColumnFills gives the value of a column a later migration appended,
 // for a row from an archive made before it. The dataset's counts are filled
-// with zero and then worked out from the records; an aborted import from
-// then is taken as not yet cleaned, so the next pass removes its bytes.
+// with zero and then worked out from the records. The creator key starts
+// null so restore can preserve the original secret before rotating it.
+// An aborted import is taken as not yet cleaned.
 var archiveColumnFills = map[string]map[string]func() backupValue{
 	"tessera_dataset": {
 		"object_count":     zeroValue,
 		"object_bytes":     zeroValue,
 		"schema_cache_key": nullBackupValue,
 		"managed_key":      nullBackupValue,
+		"creator_secret":   nullBackupValue,
 	},
 	"tessera_imports": {
-		"cleaned": zeroValue,
+		"cleaned":           zeroValue,
+		"attachment_target": nullBackupValue,
 	},
 }
 

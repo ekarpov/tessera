@@ -61,11 +61,29 @@ func onlineBackupProgress(t *testing.T, s *Store, contentID, dataset string) {
 	if err := s.SetAuthorization(t.Context(), dataset, owner, store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true, Erase: true}, View: store.FullView()}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Transact(t.Context(), owner, dataset, func(tx store.Tx) error {
+		meta, err := tx.Metadata(typeID)
+		if err != nil {
+			return err
+		}
+		meta.Fields = append(meta.Fields, p.Field{ID: "created_by", MetaID: typeID, Type: p.TextType, Creator: true})
+		_, err = tx.UpdateMetadata(meta, "")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InstallManagedTypes(t.Context(), owner, dataset, []string{typeID}); err != nil {
+		t.Fatal(err)
+	}
 	reply, err := s.Mutate(t.Context(), owner, mutation(t, dataset, "", insertBody))
 	if err != nil {
 		t.Fatal(err)
 	}
 	object := identity(t, reply)
+	creator, ok := record(t, s, dataset, object).Records[0].Values[1].Payload().(string)
+	if !ok || len(creator) != p.CreatorIDBytes {
+		t.Fatal("source did not attribute its record")
+	}
 	begin := func(op string) map[string]any {
 		v, e := s.ContentControl(t.Context(), owner, "begin", contentID, "", []byte(`{"operation_id":"`+op+`","content_type":"application/octet-stream","maximum_bytes":1048576}`))
 		return contentMap(t, v, e)
@@ -201,8 +219,16 @@ func onlineBackupProgress(t *testing.T, s *Store, contentID, dataset string) {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	if got := record(t, restored, dataset, object).Records[0].Values[0].Payload(); got != int64(9007199254740993) {
-		t.Fatal(got)
+	values := record(t, restored, dataset, object).Records[0].Values
+	if values[0].Payload() != int64(9007199254740993) || values[1].Payload() != creator {
+		t.Fatal("restore changed the stored record")
+	}
+	next, err := restored.Mutate(t.Context(), owner, mutation(t, dataset, "", insertBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := record(t, restored, dataset, identity(t, next)).Records[0].Values[1].Payload(); got != creator {
+		t.Fatal("restoring the dataset changed the creator identifier on later records")
 	}
 	for id, want := range map[string][]byte{complete["upload_id"].(string): []byte("abc"), partial["upload_id"].(string): prefix} {
 		raw, e := os.ReadFile(filepath.Join(dir, id))

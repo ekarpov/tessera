@@ -42,6 +42,7 @@ CREATE TABLE "tessera_dataset" (
     "object_bytes" bigint DEFAULT 0 NOT NULL,
     "schema_cache_key" text,
     "managed_key" text,
+    "creator_secret" bytea CHECK (length("creator_secret") = 32),
     CONSTRAINT "tessera_dataset_secret_check" CHECK ((length("secret") = 32)),
     CONSTRAINT "tessera_dataset_pkey" PRIMARY KEY ("dataset_id")
 );
@@ -64,6 +65,7 @@ CREATE TABLE "tessera_imports" (
     "item_id" text,
     "updated_at" bigint NOT NULL,
     "cleaned" integer DEFAULT 0 NOT NULL,
+    "attachment_target" TEXT,
     CONSTRAINT "tessera_imports_pkey" PRIMARY KEY ("upload_id"),
     CONSTRAINT "tessera_imports_store_id_operation_id_key" UNIQUE ("store_id", "operation_id"),
     CONSTRAINT "tessera_imports_store_id_fkey" FOREIGN KEY ("store_id") REFERENCES "tessera_content_stores"("id")
@@ -229,4 +231,20 @@ CREATE TRIGGER "tessera_schema_cache_changed"
 AFTER INSERT OR UPDATE OR DELETE ON "tessera_types"
 FOR EACH ROW EXECUTE FUNCTION "tessera_invalidate_schema_cache"();
 
-INSERT INTO "tessera_migration" ("version") VALUES (16);
+CREATE TABLE "tessera_contributions" (
+    "dataset_id" TEXT NOT NULL,
+    "object_id" TEXT NOT NULL,
+    "creator_id" TEXT NOT NULL,
+    PRIMARY KEY ("dataset_id","object_id"),
+    FOREIGN KEY ("dataset_id","object_id") REFERENCES "tessera_objects" ("dataset_id","object_id") ON DELETE CASCADE
+);
+CREATE INDEX "tessera_contributions_creator" ON "tessera_contributions" ("dataset_id","creator_id","object_id");
+CREATE TABLE "tessera_contribution_erasure" (
+    "dataset_id" TEXT NOT NULL,
+    "creator_id" TEXT NOT NULL,
+    "job_id" TEXT NOT NULL UNIQUE,
+    "done" INTEGER NOT NULL DEFAULT 0 CHECK ("done" IN (0,1)),
+    PRIMARY KEY ("dataset_id","creator_id")
+);
+
+INSERT INTO "tessera_migration" ("version") VALUES (21);

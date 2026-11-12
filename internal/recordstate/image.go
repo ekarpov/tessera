@@ -4,18 +4,21 @@ import (
 	"context"
 	p "github.com/ekarpov/tessera/pkg/protocol"
 	"github.com/ekarpov/tessera/pkg/store"
+	"maps"
 	"strconv"
 )
 
-// Image is trusted engine state, never an HTTP model. In particular Secret must
-// never be returned to a caller or included in diagnostics.
+// Image is trusted engine state, never an HTTP model. Secret and CreatorSecret
+// must stay out of responses and diagnostics.
 type Image struct {
-	ID        string
-	Secret    [32]byte
-	Next      uint64
-	Watermark string
-	Types     map[string]p.Meta
-	Objects   map[string]Row
+	ID               string
+	Secret           [32]byte
+	CreatorSecret    [32]byte
+	Next             uint64
+	Watermark        string
+	Types            map[string]p.Meta
+	Objects          map[string]Row
+	NewContributions map[string]string
 }
 type Row struct {
 	// Sequence comes from the minted engine identity, not a request parameter.
@@ -58,7 +61,7 @@ func restore(image Image, limits p.Limits, a store.Access, grant store.Authoriza
 	if p.ValidateIdentifier(p.DatasetIdentifier, image.ID) != nil || image.Next == 0 || image.Watermark == "" {
 		return nil, store.Refuse("internal_error")
 	}
-	s := &Store{lock: make(chan struct{}, 1), id: image.ID, displayName: defaultDisplayName, secret: image.Secret, limits: limits, authorizations: map[store.Access]store.Authorization{a: grant}, state: state{types: make(map[string]p.Meta, len(image.Types)), objects: make(map[string]object, len(image.Objects)), next: image.Next, watermark: image.Watermark}}
+	s := &Store{lock: make(chan struct{}, 1), id: image.ID, displayName: defaultDisplayName, secret: image.Secret, creatorSecret: image.CreatorSecret, limits: limits, authorizations: map[store.Access]store.Authorization{a: grant}, state: state{types: make(map[string]p.Meta, len(image.Types)), objects: make(map[string]object, len(image.Objects)), next: image.Next, watermark: image.Watermark}}
 	if err := s.EnableReads(reads...); err != nil {
 		return nil, err
 	}
@@ -86,7 +89,8 @@ func (s *Store) Image(ctx context.Context) (Image, error) {
 		return Image{}, err
 	}
 	defer s.release()
-	image := Image{ID: s.id, Secret: s.secret, Next: s.state.next, Watermark: s.state.watermark, Types: map[string]p.Meta{}, Objects: map[string]Row{}}
+	image := Image{ID: s.id, Secret: s.secret, CreatorSecret: s.creatorSecret, Next: s.state.next, Watermark: s.state.watermark, Types: map[string]p.Meta{}, Objects: map[string]Row{}}
+	image.NewContributions = maps.Clone(s.state.newContributions)
 	for id, m := range s.state.types {
 		image.Types[id] = cloneMeta(m)
 	}

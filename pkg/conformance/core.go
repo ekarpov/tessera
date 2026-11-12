@@ -160,9 +160,10 @@ func CheckCore(ctx context.Context, f CoreFixture) error {
 	}
 	var listing struct {
 		Datasets []struct {
-			ID     string   `json:"id"`
-			Limits p.Limits `json:"limits"`
-			Access struct {
+			ID           string   `json:"id"`
+			Limits       p.Limits `json:"limits"`
+			Capabilities []string `json:"capabilities"`
+			Access       struct {
 				Read bool `json:"read"`
 			} `json:"access"`
 		} `json:"datasets"`
@@ -201,6 +202,16 @@ func CheckCore(ctx context.Context, f CoreFixture) error {
 	}
 	if err := checkImmutable(base, f.Token, call, nonce[:]); err != nil {
 		return err
+	}
+	for _, capability := range listing.Datasets[0].Capabilities {
+		if capability == p.CreatorAttributionCapability {
+			if listing.Datasets[0].Limits.MaxTextBytes < p.CreatorIDBytes {
+				return fmt.Errorf("creator_attribution advertised below its text size requirement")
+			}
+			if err := checkCreatorAttribution(base, f.Token, call, problem, nonce[:]); err != nil {
+				return err
+			}
+		}
 	}
 	// Schema names are returned as stored. A display language is the client's
 	// business: if Accept-Language could change a name or a version, changing

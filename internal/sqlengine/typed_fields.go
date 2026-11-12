@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"math"
@@ -47,34 +48,78 @@ type typedField struct {
 }
 
 func (f typedField) value() (p.Value, error) {
+	data, err := hex.DecodeString(f.Data)
+	if err != nil {
+		return p.Value{}, err
+	}
+	return storedFieldValue(f.Kind, f.Number, data)
+}
+
+func storedFieldValue(kind p.Type, number int64, data []byte) (p.Value, error) {
 	var payload any
-	switch f.Kind {
+	switch kind {
 	case p.NullType:
 		return p.Value{}, nil
 	case p.IntegerType:
-		payload = f.Number
+		payload = number
 	case p.FloatType:
-		payload = math.Float64frombits(uint64(f.Number))
+		payload = math.Float64frombits(uint64(number))
 	case p.BooleanType:
-		payload = f.Number != 0
+		payload = number != 0
+	case p.ReferenceType:
+		parts := strings.Split(string(data), "\x00")
+		if len(parts) != 3 {
+			return p.Value{}, store.Refuse("internal_error")
+		}
+		payload = p.Reference{DatasetID: parts[0], MetaID: parts[1], ObjectID: parts[2]}
 	default:
-		data, err := hex.DecodeString(f.Data)
-		if err != nil {
-			return p.Value{}, err
-		}
 		payload = string(data)
-		if f.Kind == p.ReferenceType {
-			parts := strings.Split(string(data), "\x00")
-			if len(parts) != 3 {
-				return p.Value{}, store.Refuse("internal_error")
-			}
-			payload = p.Reference{DatasetID: parts[0], MetaID: parts[1], ObjectID: parts[2]}
-		}
 	}
-	return p.NewValue(f.Kind, payload)
+	return p.NewValue(kind, payload)
+}
+
+// PostgreSQL projections start with a zero format marker. SQLite and the
+// older persisted projections use the JSON field array.
+func decodeBinaryFields(raw []byte, row *recordstate.Row) error {
+	next := func() ([]byte, bool) {
+		if len(raw) < 4 {
+			return nil, false
+		}
+		length := uint64(binary.BigEndian.Uint32(raw))
+		raw = raw[4:]
+		if length > uint64(len(raw)) {
+			return nil, false
+		}
+		data := raw[:length]
+		raw = raw[length:]
+		return data, true
+	}
+	row.Fields = make(map[string]p.Value)
+	for len(raw) != 0 {
+		field, fieldOK := next()
+		kind, kindOK := next()
+		if !fieldOK || !kindOK || len(raw) < 8 {
+			return store.Refuse("internal_error")
+		}
+		number := int64(binary.BigEndian.Uint64(raw))
+		raw = raw[8:]
+		data, ok := next()
+		if !ok {
+			return store.Refuse("internal_error")
+		}
+		value, err := storedFieldValue(p.Type(kind), number, data)
+		if err != nil {
+			return err
+		}
+		row.Fields[string(field)] = value
+	}
+	return nil
 }
 
 func decodeStoredFields(raw []byte, row *recordstate.Row) error {
+	if len(raw) > 0 && raw[0] == 0 {
+		return decodeBinaryFields(raw[1:], row)
+	}
 	var fields []typedField
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err

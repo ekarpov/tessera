@@ -203,7 +203,7 @@ func TestAnArchiveFromBeforeTheCountsRestoresWithThem(t *testing.T) {
 			keep := []int{}
 			columns := []string{}
 			for j, c := range table.Columns {
-				if c != "object_count" && c != "object_bytes" && c != "schema_cache_key" && c != "managed_key" {
+				if c != "object_count" && c != "object_bytes" && c != "schema_cache_key" && c != "managed_key" && c != "creator_secret" {
 					keep = append(keep, j)
 					columns = append(columns, c)
 				}
@@ -295,5 +295,110 @@ func rewriteArchive(t *testing.T, from, to string, key []byte, change func(*back
 	sealed = aead.Seal(sealed, nonce, out.Bytes(), []byte("TESSERA-BACKUP-1"))
 	if err = os.WriteFile(to, sealed, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A restored copy can produce the next backup. The second restore must keep
+// the original creator key while invalidating record versions again.
+func TestCreatorAttributionAndReceiptsSurviveRepeatedRestore(t *testing.T) {
+	s, source, dataset := fixture(t)
+	auth := store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true, Erase: true}, View: store.FullView()}
+	if err := s.SetAuthorization(t.Context(), dataset, owner, auth); err != nil {
+		t.Fatal(err)
+	}
+	define := func(engine *Store, dataset string, existing bool) {
+		t.Helper()
+		if err := engine.Transact(t.Context(), owner, dataset, func(tx store.Tx) error {
+			meta := p.Meta{ID: typeID, Fields: []p.Field{
+				{ID: "n", MetaID: typeID, Type: p.IntegerType},
+				{ID: "created_by", MetaID: typeID, Type: p.TextType, Creator: true},
+			}}
+			if existing {
+				_, err := tx.UpdateMetadata(meta, "")
+				return err
+			}
+			_, err := tx.CreateMetadata(meta)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(engine *Store, dataset, operationKey string) store.Reply {
+		t.Helper()
+		request := mutation(t, dataset, operationKey, insertBody)
+		request.Represent = true
+		reply, err := engine.Mutate(t.Context(), owner, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	define(s, dataset, true)
+	operationKey := key(880)
+	original := write(s, dataset, operationKey)
+	object := identity(t, original)
+	stored := record(t, s, dataset, object).Records[0]
+	creator, ok := stored.Values[1].Payload().(string)
+	if !ok || len(creator) != p.CreatorIDBytes || !bytes.Contains(original.Body, []byte(creator)) {
+		t.Fatal("the original receipt did not carry creator attribution")
+	}
+	backupKey := bytes.Repeat([]byte{6}, 32)
+	for i := 0; i < 2; i++ {
+		dir := t.TempDir()
+		archive, destination := filepath.Join(dir, "snapshot.enc"), filepath.Join(dir, "restored.db")
+		if err := s.Backup(t.Context(), archive, backupKey); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			// Model an archive taken after creator keys were introduced but
+			// before the managed storage columns and tables existed.
+			legacy := filepath.Join(dir, "creator-only.enc")
+			rewriteArchive(t, archive, legacy, backupKey, func(m *backupManifest) {
+				m.Tables = m.Tables[:len(m.Tables)-3]
+				for j := range m.Tables {
+					table := &m.Tables[j]
+					if table.Name == "tessera_dataset" {
+						stripBackupColumn(table, "schema_cache_key")
+						stripBackupColumn(table, "managed_key")
+					}
+				}
+			})
+			archive = legacy
+		}
+		if err := RestoreBackup(t.Context(), archive, destination, "", source+".retired", backupKey); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := Open(t.Context(), destination, p.DevelopmentLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { restored.Close() })
+		current := record(t, restored, dataset, object).Records[0]
+		if current.Version == stored.Version || current.Values[1].Payload() != creator {
+			t.Fatal("restore did not rotate versions independently of creator attribution")
+		}
+		receipt, err := restored.Status(t.Context(), owner, dataset, operationKey)
+		if err != nil || receipt.State != "committed" || !bytes.Equal(receipt.Result, original.Body) {
+			t.Fatal("restoring changed the retained response", err)
+		}
+		next := identity(t, write(restored, dataset, ""))
+		if record(t, restored, dataset, next).Records[0].Values[1].Payload() != creator {
+			t.Fatal("a write after restore was attributed to a different creator")
+		}
+		s, source, stored = restored, destination, current
+	}
+
+	replacement, err := s.Erase(t.Context(), owner, dataset, dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := s.Status(t.Context(), owner, dataset, operationKey)
+	if err != nil || !receipt.ResultWithheld || len(receipt.Result) != 0 || len(receipt.Objects) != 1 || receipt.Objects[0].ObjectID != object {
+		t.Fatal("erasure did not withhold the old receipt's attribution", err)
+	}
+	define(s, replacement.DatasetID, false)
+	next := identity(t, write(s, replacement.DatasetID, ""))
+	if record(t, s, replacement.DatasetID, next).Records[0].Values[1].Payload() == creator {
+		t.Fatal("the replacement dataset reused the retired creator ID")
 	}
 }

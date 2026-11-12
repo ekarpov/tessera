@@ -102,6 +102,7 @@ func normalizeObjectArchive(table *backupTable) ([][]byte, error) {
 	if legacy == -1 {
 		return nil, nil
 	}
+	replaceLast := wire < 0 && legacy == len(table.Columns)-1
 	payloads := make([][]byte, len(table.Rows))
 	for i, row := range table.Rows {
 		if len(row) != len(table.Columns) {
@@ -123,15 +124,35 @@ func normalizeObjectArchive(table *backupTable) ([][]byte, error) {
 		payloads[i] = raw
 		size := int64(len(raw))
 		value := backupValue{Kind: "integer", Integer: &size}
-		if wire < 0 {
+		switch {
+		case replaceLast:
+			row[legacy] = value
+		case wire < 0:
 			table.Rows[i] = append(row, value)
-		} else {
-			table.Rows[i][wire] = value
+		default:
+			row[wire] = value
 		}
+	}
+	if replaceLast {
+		table.Columns[legacy] = "wire_bytes"
+		return payloads, nil
 	}
 	if wire < 0 {
 		table.Columns = append(table.Columns, "wire_bytes")
 	}
 	stripBackupColumn(table, "fields")
 	return payloads, nil
+}
+
+// carryCreatorSecret moves a creator-only database's key into the column
+// appended after the managed storage columns. Fresh and upgraded databases
+// then export the same column order.
+func carryCreatorSecret(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "creator_secret"="legacy_creator_secret"`); err != nil {
+		return dbError(ctx, err)
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE "tessera_dataset" DROP COLUMN "legacy_creator_secret"`); err != nil {
+		return dbError(ctx, err)
+	}
+	return nil
 }

@@ -56,6 +56,10 @@ func OperationGrant(op p.Operation) Grants {
 	// grant alone does not say.
 	case "insert":
 		return Grants{Insert: true}
+	case "update":
+		return Grants{UpdateOwn: true}
+	case "delete":
+		return Grants{DeleteOwn: true}
 	default:
 		return Grants{Write: true}
 	}

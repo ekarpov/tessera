@@ -98,3 +98,12 @@ var PostgresManagedUpgrade string
 
 //go:embed 018_sqlite.sql
 var SQLiteManagedUpgrade string
+
+//go:embed 019_sqlite.sql
+var SQLiteCreatorUpgrade string
+
+//go:embed 017_postgres.sql
+var PostgresCreatorUpgrade string
+
+//go:embed contribution_upgrade.sql
+var ContributionUpgrade string

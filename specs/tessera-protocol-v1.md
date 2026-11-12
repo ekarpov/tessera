@@ -744,6 +744,9 @@ Everything a client can do for itself, given the required operations above.
 | --- | --- | --- |
 | `content` | Attachments, per the [content protocol](tessera-content-v1.md). | Has no attachments. |
 | `sharing` | Grants to principals other than the owner. | Sees only its own datasets. |
+| `creator_attribution` | Server-populated [creator fields](#creator-fields). | Has no trusted creator value. |
+| `collection_access` | Exact-type collection reads and inserts through [collection fields](#collection-fields). | Uses the ordinary type and object grants. |
+| `creator_scoped_mutations` | Explicit updates and deletes within [creator-scoped grants](#creator-scoped-grants). | Updates and deletes require dataset write authority. |
 
 **`aggregation`, `distinct_references` and `text_matching` were on this list and are now required
 operations.** A server MUST NOT advertise them: there is no choice left to report.
@@ -770,7 +773,7 @@ rather than run forever. A client compensating MUST stop at a limit of its own a
 `query_result_limit_exceeded` a declining server would have returned. Silent compensation turns a
 missing capability into an unexplained hang.
 
-This now applies to `content` and `sharing` alone, and neither is a read a client can fake. That is
+This applies to `content`, `sharing`, `creator_attribution`, `collection_access` and `creator_scoped_mutations`, none of which a client can fake. That is
 not a coincidence: an optional capability a client *can* compensate for is one where compensation
 and operation give different answers, which is the case for making it required rather than
 documenting the gap.
@@ -962,7 +965,8 @@ A field:
 ```
 
 `meta_id` names the type that *declares* the field, which for an inherited field is an ancestor.
-A field may also carry `"immutable": true`; see [Immutable fields](#immutable-fields).
+A field may also carry `"immutable": true` or `"creator": true`. See [Immutable fields](#immutable-fields)
+and [Creator fields](#creator-fields).
 `name` is one human-readable stored string, returned unchanged by language negotiation. v1 has no
 translation write path, so servers MUST NOT advertise `locales` or promise translated schema names.
 Editing the stored name remains a schema edit.
@@ -1115,6 +1119,75 @@ so a client guarding a write with [`expect_type`](#asserting-a-schema) sees it.
 unrecognised member of a request is never ignored. So a client cannot silently get a field it believes
 is immutable and is not; it learns it at the schema write.
 
+### Creator fields
+
+A dataset advertising `creator_attribution` accepts `"creator": true` on a declared text field.
+False and absence are equivalent and the server returns only true. The property is inherited.
+A non-text creator field is refused with `400 meta_invalid_field`. A dataset offering the capability
+MUST admit text values of at least 32 bytes. A limit change MUST preserve this minimum while the
+dataset has any creator fields. Clients check the capability before sending the member.
+If provisioning gives the client no capability information for the new dataset, it can declare
+creator fields after discovering the dataset's capabilities.
+A server that knows the member but withholds the capability refuses the declaration with
+`403 not_supported`.
+
+On every insert, the server fills each effective creator field with the same opaque, 32-character
+lowercase hexadecimal identifier. The identifier is stable for the authenticated principal in
+that dataset, including across application authorizations, server restarts and restores that retain
+the dataset identity. Deployments MUST keep authenticated principal identities stable and MUST NOT
+reassign one principal's identity to another. Distinct principals
+in a dataset receive distinct identifiers with cryptographically negligible collision probability.
+Identifiers are unlinkable by value across datasets and MUST NOT encode a public account identifier
+or credential. An installation can use a dataset-keyed cryptographic derivation with a separate
+domain from other identifiers. Erasing a dataset ends the scope of its creator identifiers.
+
+Every record write supplying a creator field is refused with `400 invalid_field`, including an
+explicit null or a restatement. This applies to inserts, updates and bulk updates even if the
+bulk filter matches nothing. The server uses the authenticated writer even for insert-only grants.
+Attribution participates in projection, filtering, record versions and erasure as a stored text
+value under the usual visibility rules. A declaration opts into showing this pseudonym to readers
+who can see the field. It grants no authority to edit or delete any record.
+
+Adding a creator field to an existing type leaves it null on older records, including descendants.
+Subsequent inserts populate it. A schema update attempting to switch an existing field to or from
+creator status is refused with `400 meta_schema_error`. A confirmed removal discards stored values
+under the normal rules. A later declaration begins with no value on existing records.
+
+### Collection fields
+
+A dataset advertising `collection_access` supports a declared text field with
+`"collection": true`. A creator field cannot also be a collection field. An
+effective type may have at most one collection field, including inherited fields.
+An invalid declaration returns `400 meta_invalid_field`. An existing field cannot
+gain or lose the marker, and a collection field cannot be removed by a schema
+update. These changes return `400 meta_schema_error`.
+
+At insertion, a caller may give the field a text value using the object identifier
+grammar. The value names a collection local to the dataset. An omitted or null
+value creates a record outside any collection. Older records stay outside a
+collection when a schema adds the field. Supplying the field in an update returns
+`400 invalid_field`, including for bulk updates with no matches.
+
+A deployment may grant read or insert independently for an exact concrete type
+and collection ID. It chooses collection IDs and the principals or audiences
+allowed to use them. An insert grant requires the submitted collection ID to
+match. A missing or different value is refused with `403 permission_denied`.
+It conveys no authority to update or delete, attach content, or read records,
+including the contributor's own inserts. Creator fields are stamped normally.
+The authorization is checked in the transaction committing the insertion.
+Ordinary type grants retain their existing authority.
+
+A collection read grant makes matching records visible as they are inserted.
+It exposes the exact type's effective schema. It applies before query filtering,
+sorting, grouping, counts and pagination, and authorizes content attached to
+visible records under the content protocol. Direct reads outside the view return
+`404 unavailable`; the same answer covers absent objects where collection
+membership cannot be proved. Collection reads compose with type and object
+grants. Object grants still apply only to direct reads. A frozen view intersects
+collection membership with its existing sequence cut. Grant changes invalidate
+affected cursors and existing expiry checks apply. Collection grants do not
+convey dataset write, schema or erase rights.
+
 ### Changing a schema
 
 A create or update body carries **only the fields the type itself declares**; inherited fields are
@@ -1128,6 +1201,7 @@ never restated, and supplying one MUST be rejected with `meta_invalid_field`.
 | Field removed | Permitted. Its stored values are deleted throughout the hierarchy, atomically with the schema change. |
 | Field's `type` changed | MUST be rejected with `meta_schema_error`. Remove the field and add a new one if that is what is meant; the protocol does not convert stored values. |
 | Field's `name` changed | Permitted. Names are presentation only. |
+| Field's `creator` changed | Refused. Add a new creator field to opt in. |
 | Field's `immutable` changed | Permitted either way, and never touches a stored value. See [Immutable fields](#immutable-fields). |
 | `parent_id` changed | MUST be rejected with `meta_schema_error`. Reparenting rewrites which objects exist in which hierarchy and is not a schema edit. |
 | `id` changed | Not expressible; the path names the type. |
@@ -1837,8 +1911,8 @@ would for any lost response.
   of the resulting authorized view**. Two installations of one person may see different data, so the
   principal alone is not enough.
 - **The generation MUST change when the caller's effective access changes**, including grant
-  revocation or expiry and changes to application authorization. v1 visibility depends on grants,
-  never record fields; editing a field MUST NOT change the view generation. Otherwise an ordinary
+  revocation or expiry and changes to application authorization. Collection membership is fixed at
+  insertion. Editing a field MUST NOT change the view generation. Otherwise an ordinary
   data write would masquerade as a permission change, while a revoked grant could leave a cached
   page replayable.
 - The generation MUST be re-checked **before serving any page, including a replay of one already
@@ -2204,6 +2278,9 @@ everything it describes:
   over the dataset. Its body describes types, which are not anybody's records.
 - **A delete-only transaction** has identities and no values, so there is nothing to withhold: the
   owner learns it committed and which identities are gone.
+- **A transaction containing only successful explicit creator-scoped updates and deletes**
+  reports the original effect counts. These disclose no record values and remain replayable
+  to the original receipt owner even when the grant ends or the target is gone.
 - **A created object since deleted** puts the whole body in the withheld form, by the rule above. The
   identity survives, which is the part that stops a second write.
 
@@ -2466,12 +2543,11 @@ resolution, where the question asked is a different one.
 
 #### The authorized view
 
-**Sharing is an advertised capability.** A server without it has one view per dataset, equal to the
-dataset, never returns `unavailable`, and can ignore the rest of this section. Everything below
-describes what a server advertising `sharing` owes.
+Sharing and collection access are advertised capabilities. A server offering neither has a full
+dataset view. The following rules apply to the grant kinds a server advertises.
 
-**A grant is a row**: a principal, a scope, a set of rights, and an expiry. The scope is a **type** or a
-**single object**. Grants are server-side state, created however a deployment chooses — this protocol
+**A grant is a row**: a principal, a scope, a set of rights, and an expiry. The scope is a **type**, a **single object**, or a [collection](#collection-fields) on a server
+advertising `collection_access`. Grants are server-side state, created however a deployment chooses — this protocol
 does not define a way to create one, only what an existing one means.
 
 **The owner's path is not filtered.** A caller reading its own dataset is subject to no view logic at
@@ -2482,24 +2558,24 @@ Two mechanisms are easy to confuse:
 
 - **Access** — `read`, `write`, `schema`, `erase` — is what a caller may do with a dataset it is
   entitled to. It is account state, set by whatever administers the deployment, and it is how an owner
-  and their applications work.
+  and their applications work. A server may also report `update_own` and `delete_own`
+  when the installation has those [scoped rights](#creator-scoped-grants).
 - **A grant** extends access to *another* principal, and in v1 conveys `read` or
-  [`insert`](#insert-grants), each scoped to types, and never both through one scope.
+  [`insert`](#insert-grants) within its scope. A deployment can also grant
+  [creator-scoped updates or deletes](#creator-scoped-grants). Each right is granted independently.
 
 So a **service** authenticating with `client_credentials` is an ordinary principal: it may hold `write`
 on datasets it is entitled to — its own, or ones a deployment assigns it — and it may be granted read
 on someone else's. What it cannot do is be *granted* write on a dataset owned by a person, because no
-grant conveys write. It may be granted `insert`, which adds and conveys nothing else. A service that must write on a person's behalf is either writing in a dataset it
-holds `write` on, or it is not writing at all.
+grant conveys dataset-wide write. It may be granted individual contribution rights under the same rules as other principals.
 
 This matters for a hosting deployment. Holding a person's dataset does not make the host a writer in
 it: if the host's service needs to record something, it does so in a dataset of its own and shares it,
 which is the same delivery path everything else uses. How a deployment decides who holds what is
 outside this protocol — see [the deployment contract](tessera-deployment.md).
 
-**Visibility comes from the grant table, never from field values.** This is the rule that makes the
-rest cheap: because no stored value determines who sees what, **no write can move an object into or
-out of anyone's view**, and a mutation never has to be authorized against two states.
+Visibility follows the grant table and any collection membership established at insertion.
+An update cannot move a record into or out of a collection.
 
 - **Rights are `read` and `insert` in v1.** A guest may not update or delete, and may insert only
   through an [insert grant](#insert-grants), which conveys no view. The only writer with any hold on
@@ -2507,14 +2583,14 @@ out of anyone's view**, and a mutation never has to be authorized against two st
   composing a plan, a comment on someone's record — are served by writing in one's *own* dataset and
   granting read on it, with the recipient copying what they accept. The recipient then owns it
   outright, and keeps it if the relationship ends.
-- **Queries run against type grants; object grants serve direct reads.** A guest may query a type it
-  holds a grant for, and may fetch by identity an object it holds a grant for. A query is not filtered
+- **Queries run against type and collection read grants.** A guest may query within those
+  scopes and may fetch by identity an object it holds an object grant for. A query is not filtered
   down to a scatter of individually granted objects — that would put per-row view evaluation into the
   query engine of every deployment, to serve a case that reads by identity anyway.
 - **A type grant covers only the named concrete type**, never its descendants. An existing or newly
   created subtype requires its own type grant; creating a subtype MUST NOT silently widen a guest
   view. Descendant-inclusive queries and counts intersect their type scope with the caller's exact
-  type grants before grouping, counting, pagination and limits. An object grant still authorizes
+  type and collection grants before grouping, counting, pagination and limits. An object grant still authorizes
   only direct reads and MUST NOT add rows to that intersection.
 - **Individually granted objects are therefore not discoverable through this protocol.** A recipient
   cannot query a shared type to find what was shared with them, because that type holds other
@@ -2545,15 +2621,14 @@ not change what its clients have to handle.
 #### Insert grants
 
 **An insert grant conveys no continuing authority over what was written.** It lets a principal add
-records of exactly the concrete types it names, and nothing else. What it adds belongs to the dataset
-from the moment it commits: the contributor cannot read it, change it or delete it, unless some
-other grant it holds would let it do that to any record of the type — in which case that grant does,
-and the record is to it like any other.
+records of exactly the concrete types and, where named, collections it grants. What it adds belongs to the dataset
+from the moment it commits: the contributor cannot read it, change it or delete it, unless
+another grant independently authorizes that action.
 
 It is for a writer with no continuing relationship with what it writes: a form, a survey, a device
 or a sensor, a feed reporting transactions, a till reporting totals — something asserted once and
-never revised by its sender. **A writer who has to correct and withdraw what it wrote is not a
-contributor**, and nothing here should be extended to make it one.
+never revised by its sender. A deployment that lets the sender revise or withdraw a record
+can grant creator-scoped rights separately.
 
 - **Exact concrete types**, never descendants, for the reason a type grant never covers one.
   Inserting any other type fails `403 permission_denied`.
@@ -2566,7 +2641,7 @@ contributor**, and nothing here should be extended to make it one.
 - **Composition is by type and by right, and nothing else.** A principal may hold read on some types
   and insert on others, or both on one. Each right authorizes its own operations: a record it added
   to a type it also reads is visible because it reads that type, exactly as any other record of the
-  type is, and not because it added it. There is no rule of the form *its own records*.
+  type is, and not because it added it.
 - **An insert is an insert through every route**: the single-operation form, and `insert` inside
   `:transact`. A transaction is authorized per operation, so a contributor's transaction that also
   checks or changes anything fails at the first operation that needs more, before any write.
@@ -2576,13 +2651,35 @@ contributor**, and nothing here should be extended to make it one.
   [`Prefer: return=representation`](#idempotency) is declined for the same reason.
 - **The watermark on its response is the dataset's**, as for any guest. It is opaque, and says only
   that something changed.
-- **Attaching content is not conveyed.** A `media` value needs the authority the
-  [content protocol](tessera-content-v1.md) defines, and an insert grant confers none.
+- **Attachments** require the authority defined by the
+  [content protocol](tessera-content-v1.md#scoped-attachment-writes). A collection insert
+  grant can authorize a target-bound upload on stores advertising that capability.
 
 A contributor's records count against the dataset like any other, and an insert grant can write as
 fast as its limits allow. **Admission, quota and rate are the deployment's**, as they are for every
 write; see [the deployment contract](tessera-deployment.md). An owner who did not want a
 contribution deletes it, as it would any record.
+
+#### Creator-scoped grants
+
+A dataset advertising `creator_scoped_mutations` also advertises `creator_attribution` and
+`collection_access`. Deployments may grant `update_own` and `delete_own` independently,
+each over an exact concrete type and collection pair. These rights authorize an explicit
+record update or delete through its single-record route or a transaction operation. The
+principal MUST currently be able to read the record. The server MUST check that a stored
+creator field matches the principal's dataset-local creator ID and that the record's
+immutable membership matches the grant. An unstamped record has no creator authority.
+
+A record outside the caller's readable view is `404 unavailable` under the ordinary
+visibility rules. A readable record whose collection or creator does not match is
+`403 permission_denied`. A missing mutation right is also `403 permission_denied`.
+The same checks apply to an empty patch. Dataset-wide write retains its usual authority.
+
+Predicate-based updates and deletes still require dataset-wide write. Creator-scoped
+rights convey no insert, schema, or dataset erasure permission. A non-null media value
+requires an item authorized by the [content protocol](tessera-content-v1.md#scoped-attachment-writes).
+The existing rules for immutable, creator and collection fields still apply. Grant changes serialize with the transaction
+that checks them.
 
 ## Content
 

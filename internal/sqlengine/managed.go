@@ -52,9 +52,10 @@ func managedColumn(index int) string { return `"c` + strconv.Itoa(index) + `"` }
 type managedMapping map[string][]installedLayout
 
 type managedPlan struct {
-	mapping managedMapping
-	values  string
-	source  string
+	mapping     managedMapping
+	values      string
+	source      string
+	collections *collectionScan
 }
 
 type managedCache struct {
@@ -529,9 +530,15 @@ func (s *Store) objectProjection(values string) string {
         'number',v."number",'data',hex(v."data"))) FROM ` + values + ` AS v
         WHERE v."dataset_id"=o."dataset_id" AND v."object_id"=o."object_id") AS BLOB)`
 	if s.postgres {
-		pack = `convert_to(coalesce((SELECT json_agg(json_build_object('field',v."field_id",'kind',v."kind",
-            'number',v."number",'data',encode(v."data",'hex')))::text FROM ` + values + ` AS v
-            WHERE v."dataset_id"=o."dataset_id" AND v."object_id"=o."object_id"),'[]'),'UTF8')`
+		// Send typed field bytes directly. Text JSON packing otherwise encodes
+		// each byte payload as hex and makes the evaluator parse it back.
+		pack = `decode('00','hex') || coalesce((SELECT string_agg(
+            int4send(octet_length(v."field_id")) || convert_to(v."field_id",'UTF8') ||
+            int4send(octet_length(v."kind")) || convert_to(v."kind",'UTF8') ||
+            int8send(coalesce(v."number",0)) ||
+            int4send(coalesce(octet_length(v."data"),0)) || coalesce(v."data",''::bytea),
+            ''::bytea) FROM ` + values + ` AS v
+            WHERE v."dataset_id"=o."dataset_id" AND v."object_id"=o."object_id"),''::bytea)`
 	}
 	return `SELECT o."dataset_id",o."object_id",o."type_id",` + pack +
 		` AS "fields",o."wire_bytes" FROM "tessera_objects" o`

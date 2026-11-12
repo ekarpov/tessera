@@ -23,7 +23,7 @@ var owner = store.Access{Principal: "synthetic", Authorization: "owner"}
 const typeID = "test.record"
 const insertBody = `{"operations":[{"op":"insert","type":"test.record","fields":{"n":{"type":"integer","value":9007199254740993}},"as":"entry"}]}`
 
-func fixture(t *testing.T) (*Store, string, string) {
+func fixture(t testing.TB) (*Store, string, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "dataset.db")
 	s, err := Open(t.Context(), path, p.DevelopmentLimits())
@@ -59,7 +59,7 @@ func key(n int) string { return fmt.Sprintf("00000000-0000-0000-0000-%012d", n) 
 
 // sole names the dataset a test store holds. Tests that are not about routing
 // name it this way; those that are name an identity outright.
-func sole(t *testing.T, s *Store) string {
+func sole(t testing.TB, s *Store) string {
 	t.Helper()
 	held, err := s.SoleDataset(t.Context())
 	if err != nil {

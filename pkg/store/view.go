@@ -49,7 +49,7 @@ func (v View) AllowsType(id string) bool {
 // AllowsMetadata includes the types a caller may insert into: writing a record
 // of a type needs its schema, and a schema discloses no record.
 func (v View) AllowsMetadata(id string) bool {
-	if v.AllowsType(id) || v.AllowsInsert(id) {
+	if v.AllowsQueryType(id) || v.AllowsInsertType(id) {
 		return true
 	}
 	for k := range v.objects {
@@ -84,20 +84,28 @@ func (v View) MarshalJSON() ([]byte, error) {
 		return objects[i].ObjectID < objects[j].ObjectID
 	})
 	return json.Marshal(struct {
-		Full        bool        `json:"full"`
-		SequenceCut uint64      `json:"sequence_cut,omitempty"`
-		Types       []string    `json:"types,omitempty"`
-		Objects     []ObjectKey `json:"objects,omitempty"`
-		Inserts     []string    `json:"insert_types,omitempty"`
-	}{v.full, v.sequenceCut, types, objects, inserts})
+		Full              bool              `json:"full"`
+		SequenceCut       uint64            `json:"sequence_cut,omitempty"`
+		Types             []string          `json:"types,omitempty"`
+		Objects           []ObjectKey       `json:"objects,omitempty"`
+		Inserts           []string          `json:"insert_types,omitempty"`
+		ReadCollections   []CollectionScope `json:"read_collections,omitempty"`
+		InsertCollections []CollectionScope `json:"insert_collections,omitempty"`
+		UpdateOwn         []CollectionScope `json:"update_own_collections,omitempty"`
+		DeleteOwn         []CollectionScope `json:"delete_own_collections,omitempty"`
+	}{v.full, v.sequenceCut, types, objects, inserts, v.readCollections, v.insertCollections, v.updateOwn, v.deleteOwn})
 }
 func (v *View) UnmarshalJSON(raw []byte) error {
 	var wire struct {
-		Full        bool        `json:"full"`
-		SequenceCut uint64      `json:"sequence_cut,omitempty"`
-		Types       []string    `json:"types"`
-		Objects     []ObjectKey `json:"objects"`
-		Inserts     []string    `json:"insert_types"`
+		Full              bool              `json:"full"`
+		SequenceCut       uint64            `json:"sequence_cut,omitempty"`
+		Types             []string          `json:"types"`
+		Objects           []ObjectKey       `json:"objects"`
+		Inserts           []string          `json:"insert_types"`
+		ReadCollections   []CollectionScope `json:"read_collections"`
+		InsertCollections []CollectionScope `json:"insert_collections"`
+		UpdateOwn         []CollectionScope `json:"update_own_collections"`
+		DeleteOwn         []CollectionScope `json:"delete_own_collections"`
 	}
 	if json.Unmarshal(raw, &wire) != nil {
 		return Refuse("invalid_field")
@@ -111,8 +119,12 @@ func (v *View) UnmarshalJSON(raw []byte) error {
 		if len(wire.Types) > 0 || len(wire.Objects) > 0 {
 			return Refuse("invalid_field")
 		}
-		*v = FullView().WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut)
-		return nil
+		next, err := FullView().WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut).WithCollections(wire.ReadCollections, wire.InsertCollections)
+		if err == nil && (len(wire.UpdateOwn) != 0 || len(wire.DeleteOwn) != 0) {
+			next, err = next.WithOwnMutations(wire.UpdateOwn, wire.DeleteOwn)
+		}
+		*v = next
+		return err
 	}
 	for _, id := range wire.Types {
 		if p.ValidateIdentifier(p.MetaIdentifier, id) != nil {
@@ -124,8 +136,12 @@ func (v *View) UnmarshalJSON(raw []byte) error {
 			return Refuse("invalid_identifier")
 		}
 	}
-	*v = SharedView(wire.Types, wire.Objects...).WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut)
-	return nil
+	next, err := SharedView(wire.Types, wire.Objects...).WithInserts(wire.Inserts).BeforeSequence(wire.SequenceCut).WithCollections(wire.ReadCollections, wire.InsertCollections)
+	if err == nil && (len(wire.UpdateOwn) != 0 || len(wire.DeleteOwn) != 0) {
+		next, err = next.WithOwnMutations(wire.UpdateOwn, wire.DeleteOwn)
+	}
+	*v = next
+	return err
 }
 
 // BeforeSequence narrows records to those minted before cut. Zero removes the

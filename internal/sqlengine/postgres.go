@@ -128,7 +128,7 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		if err = s.refreshManagedViews(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version <= 13 {
+	} else if version <= 14 {
 		// Only pre-v0.1.0 databases need the historical schema steps.
 		historical := [...]string{
 			migrations.PostgresV2, migrations.PostgresV3, migrations.PostgresV4,
@@ -136,8 +136,13 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 			migrations.PostgresV8, migrations.PostgresV9, migrations.PostgresV10,
 			migrations.PostgresV11, migrations.PostgresV12, migrations.PostgresV13,
 		}
-		for _, step := range historical[version-1:] {
+		for _, step := range historical[min(version-1, len(historical)):] {
 			if _, err = tx.ExecContext(ctx, step); err != nil {
+				return nil, dbError(ctx, err)
+			}
+		}
+		if version == 14 {
+			if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_dataset" RENAME COLUMN "creator_secret" TO "legacy_creator_secret"`); err != nil {
 				return nil, dbError(ctx, err)
 			}
 		}
@@ -147,11 +152,37 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 16`); err != nil {
+	} else if version != 16 && version != 17 && version != 18 && version != 19 && version != 20 && version != 21 {
+		return nil, store.Refuse("not_supported")
+	}
+	if version != 0 && version < 17 {
+		if _, err = tx.ExecContext(ctx, migrations.PostgresCreatorUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
-	} else if version != 16 {
-		return nil, store.Refuse("not_supported")
+		if version == 14 {
+			if err = carryCreatorSecret(ctx, tx); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if version != 0 && version < 20 {
+		if _, err = tx.ExecContext(ctx, migrations.ContributionUpgrade); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if err = s.backfillContributions(ctx, tx); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 20`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+	}
+	if version != 0 && version < 21 {
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE "tessera_imports" ADD COLUMN "attachment_target" TEXT`); err != nil {
+			return nil, dbError(ctx, err)
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 21`); err != nil {
+			return nil, dbError(ctx, err)
+		}
 	}
 	var bounds p.Limits
 	if bounds, err = storageLimits(ctx, tx); err != nil {

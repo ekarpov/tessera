@@ -29,6 +29,8 @@ type state struct {
 	objects   map[string]object
 	next      uint64
 	watermark string
+	// Insert-time stamps are consumed by the durable writer for this transaction.
+	newContributions map[string]string
 }
 type Store struct {
 	lock chan struct{}
@@ -61,7 +63,8 @@ type Store struct {
 	scanFrom       func(typeIDs []string, after string, visit func(id string, row Row) (bool, error)) error
 	state          state
 	secret         [32]byte
-	mediaAuthority func(string) error
+	creatorSecret  [32]byte
+	mediaAuthority func(string, p.AttachmentTarget) error
 	// sourcedWrites lets a write evaluate against records fetched one at a
 	// time through source rather than against the whole dataset. What it
 	// fetches is kept, with its original, so the caller can write back only
@@ -164,6 +167,7 @@ func New(limits p.Limits) (*Store, error) {
 	if _, err := rand.Read(s.secret[:]); err != nil {
 		return nil, err
 	}
+	s.creatorSecret = s.secret
 	return s, nil
 }
 
@@ -223,6 +227,7 @@ func (s *Store) authorization(a store.Access) (store.Authorization, error) {
 	if !a.Valid() || !ok || !grant.View.Valid() || grant.Grants.ExpiresAt != nil && !time.Now().Before(*grant.Grants.ExpiresAt) {
 		return store.Authorization{}, store.Refuse("permission_denied")
 	}
+	grant.View = grant.View.WithCollectionRights(grant.Grants)
 	return grant, nil
 }
 
@@ -281,7 +286,11 @@ func (s *Store) Info(ctx context.Context, a store.Access, dataset string) (store
 		expiry := *access.ExpiresAt
 		access.ExpiresAt = &expiry
 	}
-	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: s.ReadCapabilities(), Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest("view", viewBytes(g.View)), SchemaVersion: s.digest("schema", raw)}, nil
+	capabilities := append(s.ReadCapabilities(), p.CollectionAccessCapability)
+	if s.limits.MaxTextBytes >= p.CreatorIDBytes {
+		capabilities = append(capabilities, p.CreatorAttributionCapability, p.CreatorScopedMutationsCapability)
+	}
+	return store.Info{ID: s.id, DisplayName: s.displayName, Access: access, Capabilities: capabilities, Limits: s.limits, Watermark: s.state.watermark, ViewVersion: s.digest(&s.secret, "view", viewBytes(g.View)), SchemaVersion: s.digest(&s.secret, "schema", raw)}, nil
 }
 
 // ReadSchema evaluates a request that reads the schema and no records. This
@@ -456,7 +465,7 @@ func (s *Store) Transact(ctx context.Context, a store.Access, dataset string, fn
 		return err
 	}
 	s.neededImage, s.originals = false, nil
-	t := &transaction{ctx: ctx, engine: s, auth: grant, state: cloneState(s.state), active: true}
+	t := &transaction{ctx: ctx, engine: s, auth: grant, principal: a.Principal, state: cloneState(s.state), active: true}
 	if s.sourcedWrites {
 		t.originals = map[string]object{}
 	}
@@ -482,13 +491,14 @@ func (s *Store) Transact(ctx context.Context, a store.Access, dataset string, fn
 }
 
 type transaction struct {
-	ctx    context.Context
-	engine *Store
-	auth   store.Authorization
-	state  state
-	active bool
-	failed error
-	dirty  bool
+	ctx       context.Context
+	engine    *Store
+	auth      store.Authorization
+	principal string
+	state     state
+	active    bool
+	failed    error
+	dirty     bool
 	// streamed holds the records this evaluation read through the scan
 	// source. They live here and never in state: the image a read evaluates
 	// against may be shared rather than copied, so writing into it would be a
@@ -642,10 +652,12 @@ func (t *transaction) lookup(typeID, id string) (object, error) {
 		return object{}, err
 	}
 	// No schema or object existence check may precede the view decision.
-	if !t.auth.View.Allows(store.ObjectKey{TypeID: typeID, ObjectID: id}) {
+	key := store.ObjectKey{TypeID: typeID, ObjectID: id}
+	collectionOnly := !t.auth.View.Allows(key)
+	if collectionOnly && !t.auth.View.AllowsQueryType(typeID) {
 		return object{}, store.Refuse("unavailable")
 	}
-	if _, ok := t.state.types[typeID]; !ok && t.auth.View.SequenceCut() == 0 {
+	if _, ok := t.state.types[typeID]; !ok && !collectionOnly && t.auth.View.SequenceCut() == 0 {
 		return object{}, store.Refuse("meta_type_not_found")
 	}
 	o, ok := t.state.objects[id]
@@ -687,6 +699,13 @@ func (t *transaction) lookup(typeID, id string) (object, error) {
 			t.state.objects[id] = object{sequence: o.sequence, typeID: o.typeID, fields: cloneFields(o.fields)}
 			o = t.state.objects[id]
 		}
+	}
+	if collectionOnly {
+		if !ok || o.typeID != typeID ||
+			!t.auth.View.AllowsCollectionRecord(key, o.sequence, CollectionID(t.state.types, typeID, o.fields)) {
+			return object{}, store.Refuse("unavailable")
+		}
+		return o, nil
 	}
 	if t.auth.View.SequenceCut() != 0 {
 		sequence := o.sequence
@@ -757,36 +776,49 @@ func (t *transaction) record(typeID, id string, o object, fields []string, inclu
 	}
 	return p.RecordSet{Watermark: t.Watermark(), Meta: meta, Records: []p.Record{{ID: p.ObjectID{ID: id, DatasetID: t.engine.id}, MetaID: o.typeID, Values: values, Version: version}}}, nil
 }
-func (t *transaction) convert(typeID string, fields map[string]p.Value) (map[string]p.Value, error) {
-	converted, _, err := t.convertDeclared(typeID, fields)
-	return converted, err
-}
 
-// convertDeclared also answers which of the named fields are immutable, so an
-// update learns it from the schema it converted against rather than resolving
-// the type a second time.
-func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value) (map[string]p.Value, map[string]bool, error) {
-	if !t.auth.View.AllowsType(typeID) && !t.auth.View.AllowsInsert(typeID) {
-		return nil, nil, store.Refuse("permission_denied")
-	}
+// convertDeclared fills creator fields on insert and reports which supplied
+// fields are immutable for updates.
+func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool, target p.AttachmentTarget, targetFields map[string]p.Value) (map[string]p.Value, map[string]bool, error) {
 	meta, err := t.effective(typeID)
 	if err != nil {
 		return nil, nil, err
 	}
 	byID := map[string]p.Field{}
+	result := make(map[string]p.Value, len(fields))
+	var creator p.Value
 	for _, f := range meta.Fields {
 		byID[f.ID] = f
+		if inserting && f.Creator {
+			if t.engine.limits.MaxTextBytes < p.CreatorIDBytes {
+				return nil, nil, store.Refuse("not_supported")
+			}
+			if creator.Type() == p.NullType {
+				// Bind to the dataset and principal, never the installation or
+				// a caller-supplied identity. Keep the principal off the wire.
+				creator, err = p.NewValue(p.TextType, t.creatorID())
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			result[f.ID] = creator
+		}
 	}
-	result := make(map[string]p.Value, len(fields))
 	var immutable map[string]bool
 	for id, v := range fields {
 		declared, ok := byID[id]
-		if !ok {
+		if !ok || declared.Creator || declared.Collection && !inserting {
 			return nil, nil, store.Refuse("invalid_field")
 		}
+		if declared.Collection && v.Type() != p.NullType &&
+			(v.Type() != p.TextType || p.ValidateIdentifier(p.ObjectIdentifier, v.Payload().(string)) != nil) {
+			return nil, nil, store.Refuse("invalid_field_value")
+		}
 		kind := declared.Type
-		if kind == p.MediaType && v.Type() != p.NullType && t.engine.mediaAuthority == nil {
-			return nil, nil, store.Refuse("not_supported")
+		if kind == p.MediaType && v.Type() != p.NullType {
+			if t.engine.mediaAuthority == nil {
+				return nil, nil, store.Refuse("not_supported")
+			}
 		}
 		converted, err := v.Convert(kind, t.engine.limits)
 		if err != nil {
@@ -802,7 +834,10 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value) 
 			}
 		}
 		if converted.Type() == p.MediaType {
-			if err = t.engine.mediaAuthority(converted.Payload().(string)); err != nil {
+			if !t.auth.Grants.Write && target.CollectionID == "" {
+				target.CollectionID = CollectionID(t.state.types, typeID, targetFields)
+			}
+			if err = t.engine.mediaAuthority(converted.Payload().(string), target); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -829,10 +864,11 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 	// a descendant, for the reason a type grant never covers one. Identity-set
 	// views still cannot authorize a newly minted identity on their own.
 	owner := t.auth.Grants.Write && t.auth.View.Full()
-	if !owner && !(t.auth.Grants.Insert && t.auth.View.AllowsInsert(typeID)) {
+	if !owner && !(t.auth.Grants.Insert && (t.auth.View.AllowsInsert(typeID) ||
+		t.auth.View.AllowsCollectionInsert(typeID, CollectionID(t.state.types, typeID, fields)))) {
 		return result, store.Refuse("permission_denied")
 	}
-	converted, err := t.convert(typeID, fields)
+	converted, _, err := t.convertDeclared(typeID, fields, true, p.AttachmentTarget{TypeID: typeID}, fields)
 	if err != nil {
 		return result, err
 	}
@@ -851,6 +887,12 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 	}
 	o := object{t.state.next - 1, typeID, converted}
 	t.state.objects[id] = o
+	if field := CreatorField(t.state.types, typeID); field != "" {
+		if t.state.newContributions == nil {
+			t.state.newContributions = map[string]string{}
+		}
+		t.state.newContributions[id] = converted[field].Payload().(string)
+	}
 	if t.originals != nil {
 		if t.inserted == nil {
 			t.inserted = map[string]bool{}
@@ -861,10 +903,7 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 }
 func (t *transaction) Delete(typeID, id string) (err error) {
 	defer func() { t.fail(err) }()
-	if err = t.check(t.auth.Grants.Write); err != nil {
-		return err
-	}
-	if _, err = t.lookup(typeID, id); err != nil {
+	if _, err = t.ownMutationTarget(typeID, id, true); err != nil {
 		return err
 	}
 	if err = t.touch(); err != nil {
@@ -877,14 +916,11 @@ func (t *transaction) Delete(typeID, id string) (err error) {
 // Update sets named fields; an empty PATCH is a checked no-op.
 func (t *transaction) Update(typeID, id string, fields map[string]p.Value) (err error) {
 	defer func() { t.fail(err) }()
-	if err = t.check(t.auth.Grants.Write); err != nil {
-		return err
-	}
-	o, err := t.lookup(typeID, id)
+	o, err := t.ownMutationTarget(typeID, id, false)
 	if err != nil {
 		return err
 	}
-	converted, immutable, err := t.convertDeclared(typeID, fields)
+	converted, immutable, err := t.convertDeclared(typeID, fields, false, p.AttachmentTarget{TypeID: typeID, ObjectID: id}, o.fields)
 	if err != nil {
 		return err
 	}
@@ -1012,7 +1048,8 @@ func (t *transaction) version(o object) string {
 }
 func (t *transaction) Authorize(g store.Grants) error {
 	return t.check((!g.Read || t.auth.Grants.Read) && (!g.Write || t.auth.Grants.Write) && (!g.Schema || t.auth.Grants.Schema) && (!g.Erase || t.auth.Grants.Erase) &&
-		(!g.Insert || t.auth.Grants.Write || t.auth.Grants.Insert))
+		(!g.Insert || t.auth.Grants.Write || t.auth.Grants.Insert) &&
+		(!g.UpdateOwn || t.canMutateOwn(false)) && (!g.DeleteOwn || t.canMutateOwn(true)))
 }
 func (t *transaction) Expect(typeID, id string, fields map[string]p.Value, version *string) (err error) {
 	defer func() { t.fail(err) }()
@@ -1111,7 +1148,7 @@ func (t *transaction) readable(typeID string, predicate *p.Predicate, sc reach) 
 	if err := t.check(t.auth.Grants.Read || t.auth.Grants.Write); err != nil {
 		return nil, err
 	}
-	if !t.auth.View.AllowsType(typeID) {
+	if !t.auth.View.AllowsQueryType(typeID) {
 		return nil, store.Refuse("permission_denied")
 	}
 	meta, err := t.effective(typeID)
@@ -1129,7 +1166,7 @@ func (t *transaction) readable(typeID string, predicate *p.Predicate, sc reach) 
 		if sc.types != nil && !sc.types[id] {
 			continue
 		}
-		if !t.auth.View.Full() && !t.auth.View.AllowsType(id) {
+		if !t.auth.View.AllowsQueryType(id) {
 			continue
 		}
 		readable[id] = true
@@ -1144,11 +1181,16 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 	}
 	result := []store.ObjectKey{}
 	scanned := 0
+	view := &t.auth.View
+	full := view.Full()
 	// consider charges one row against the scan bound and reports whether it
 	// matched. Stopping is the caller's decision, because only the streaming
 	// path reads in the order that makes stopping correct.
 	consider := func(id string, o object) (bool, error) {
-		if !t.auth.View.AllowsSequence(store.ObjectKey{TypeID: o.typeID, ObjectID: id}, o.sequence) {
+		key := store.ObjectKey{TypeID: o.typeID, ObjectID: id}
+		if !full &&
+			!(view.AllowsType(o.typeID) && view.AllowsSequence(key, o.sequence)) &&
+			!(view.HasCollectionReads() && view.AllowsCollectionRecord(key, o.sequence, CollectionID(t.state.types, o.typeID, o.fields))) {
 			return false, nil
 		}
 		scanned++
@@ -1163,7 +1205,7 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 			return false, e
 		}
 		if match {
-			result = append(result, store.ObjectKey{TypeID: o.typeID, ObjectID: id})
+			result = append(result, key)
 		}
 		return match, nil
 	}
@@ -1325,10 +1367,13 @@ func (t *transaction) UpdateMetadata(m p.Meta, confirm string) (result p.Meta, e
 	for _, f := range previous.Fields {
 		now, ok := current[f.ID]
 		if !ok {
+			if f.Collection {
+				return result, store.Refuse("meta_schema_error")
+			}
 			removed = append(removed, f.ID)
 			continue
 		}
-		if now.Type != f.Type {
+		if now.Type != f.Type || now.Creator != f.Creator || now.Collection != f.Collection {
 			return result, store.Refuse("meta_schema_error")
 		}
 		// A scale may be widened and never narrowed. Widening costs nothing
@@ -1408,12 +1453,12 @@ func (t *transaction) ValidateFields(typeID string, fields map[string]p.Value) e
 	if err := t.check(t.auth.Grants.Write); err != nil {
 		return err
 	}
-	_, err := t.convert(typeID, fields)
+	_, _, err := t.convertDeclared(typeID, fields, false, p.AttachmentTarget{}, nil)
 	return err
 }
 
-func (s *Store) digest(purpose string, raw []byte) string {
-	h := hmac.New(sha256.New, s.secret[:])
+func (s *Store) digest(key *[32]byte, purpose string, raw []byte) string {
+	h := hmac.New(sha256.New, key[:])
 	h.Write([]byte(purpose))
 	h.Write([]byte{0})
 	h.Write([]byte(s.id))
@@ -1431,7 +1476,7 @@ func (t *transaction) effective(id string) (p.Meta, error) {
 	if err != nil {
 		return m, err
 	}
-	m.SchemaVersion = t.engine.digest("type", raw)
+	m.SchemaVersion = t.engine.digest(&t.engine.secret, "type", raw)
 	return m, nil
 }
 func (t *transaction) ExpectType(id, version string) (err error) {
@@ -1447,7 +1492,9 @@ func (t *transaction) ExpectType(id, version string) (err error) {
 }
 
 // SetMediaAuthority installs a validator tied to the enclosing SQL transaction.
-func (s *Store) SetMediaAuthority(validate func(string) error) { s.mediaAuthority = validate }
+func (s *Store) SetMediaAuthority(validate func(string, p.AttachmentTarget) error) {
+	s.mediaAuthority = validate
+}
 
 // Provisioned names the datasets this evaluator holds, for composition. There
 // is always exactly one. It takes no access, because this is the call that

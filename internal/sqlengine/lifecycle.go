@@ -171,7 +171,7 @@ func (s *Store) eraseWithin(ctx context.Context, tx *sql.Tx, a store.Access, dat
 		}
 	}
 	// The rename is last: everything above resolves against the erased identity.
-	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "dataset_id"=$1,"secret"=$2,"next_id"=$3,"watermark"=$4,"replaced_dataset_id"=$5,"object_count"=0,"object_bytes"=0,"schema_cache_key"=NULL,"managed_key"=NULL WHERE "dataset_id"=$6`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, dataset, dataset); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE "tessera_dataset" SET "dataset_id"=$1,"secret"=$2,"creator_secret"=NULL,"next_id"=$3,"watermark"=$4,"replaced_dataset_id"=$5,"object_count"=0,"object_bytes"=0,"schema_cache_key"=NULL,"managed_key"=NULL WHERE "dataset_id"=$6`, image.ID, image.Secret[:], strconv.FormatUint(image.Next, 10), image.Watermark, dataset, dataset); err != nil {
 		return result, dbError(ctx, err)
 	}
 	return store.EraseResult{DatasetID: image.ID, Watermark: image.Watermark}, nil
@@ -231,7 +231,8 @@ func (s *Store) CheckpointCleanup(ctx context.Context) error {
 func (s *Store) journalRetirements(ctx context.Context) error {
 	s.journalMu.Lock()
 	defer s.journalMu.Unlock()
-	rows, err := s.db.QueryContext(ctx, `SELECT "dataset_id","journaled" FROM "tessera_retirements"`)
+	rows, err := s.db.QueryContext(ctx, `SELECT "dataset_id","journaled" FROM "tessera_retirements"
+ UNION ALL SELECT 'contribution:' || "dataset_id" || ':' || "job_id",1 FROM "tessera_contribution_erasure"`)
 	if err != nil {
 		return dbError(ctx, err)
 	}
@@ -324,6 +325,22 @@ func (s *Store) checkRestoreFence(ctx context.Context) error {
 		var retired string
 		if json.Unmarshal(scan.Bytes(), &retired) != nil {
 			return store.Refuse("dataset_unavailable")
+		}
+		if dataset, job, ok := splitContributionFence(retired); ok {
+			if dataset == "" || job == "" {
+				return store.Refuse("dataset_unavailable")
+			}
+			var missing int
+			err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM "tessera_dataset" d WHERE d."dataset_id"=$1
+              AND NOT EXISTS (SELECT 1 FROM "tessera_contribution_erasure" e WHERE e."dataset_id"=$1 AND e."job_id"=$2)`,
+				dataset, job).Scan(&missing)
+			if err != nil {
+				return dbError(ctx, err)
+			}
+			if missing != 0 {
+				return store.Refuse("dataset_unavailable")
+			}
+			continue
 		}
 		// A retired identity that still names a live dataset or an active content
 		// store means the database predates the retirement it was restored past.

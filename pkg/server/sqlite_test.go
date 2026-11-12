@@ -17,7 +17,7 @@ import (
 	"github.com/ekarpov/tessera/pkg/store/sqlite"
 )
 
-func sqliteFixture(t *testing.T, reads ...string) (*sqlite.Store, http.Handler, string) {
+func sqliteFixture(t testing.TB, reads ...string) (*sqlite.Store, http.Handler, string) {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dataset.db"), p.DevelopmentLimits())
 	if err != nil {
