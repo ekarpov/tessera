@@ -116,7 +116,7 @@ func TestLegacyReceiptMigrationAndBackupRestore(t *testing.T) {
 				}
 			}
 		}
-		m.Tables = m.Tables[:len(m.Tables)-3]
+		m.Tables = m.Tables[:packedArchiveTables-3]
 		for i := range m.Tables {
 			table := &m.Tables[i]
 			switch table.Name {
