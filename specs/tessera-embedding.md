@@ -143,8 +143,9 @@ Proposed names, not yet contracts: `sharing.v1`, `record-history.v1`, `personal-
 
 ## The authorized dataset view
 
-v1 sharing uses read-only grants. Queries operate within exact type grants; object grants permit
-only direct reads. Neither record values nor domain policy determine membership. A lookup outside
+Queries operate within exact type and collection read grants. Object grants permit direct reads.
+A [collection field](tessera-protocol-v1.md#collection-fields) fixes membership at insertion.
+A lookup outside
 the view returns `404 unavailable`, whether or not the record exists. Within an authorized view,
 `404 not_found` means absence; `403 permission_denied` refuses an operation. A client must preserve
 these three answers so withdrawal is never reported as deletion.

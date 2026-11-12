@@ -230,4 +230,4 @@ CREATE TRIGGER "tessera_schema_cache_changed"
 AFTER INSERT OR UPDATE OR DELETE ON "tessera_types"
 FOR EACH ROW EXECUTE FUNCTION "tessera_invalidate_schema_cache"();
 
-INSERT INTO "tessera_migration" ("version") VALUES (17);
+INSERT INTO "tessera_migration" ("version") VALUES (18);

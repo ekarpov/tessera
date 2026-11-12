@@ -745,6 +745,7 @@ Everything a client can do for itself, given the required operations above.
 | `content` | Attachments, per the [content protocol](tessera-content-v1.md). | Has no attachments. |
 | `sharing` | Grants to principals other than the owner. | Sees only its own datasets. |
 | `creator_attribution` | Server-populated [creator fields](#creator-fields). | Has no trusted creator value. |
+| `collection_access` | Exact-type collection reads and inserts through [collection fields](#collection-fields). | Uses the ordinary type and object grants. |
 
 **`aggregation`, `distinct_references` and `text_matching` were on this list and are now required
 operations.** A server MUST NOT advertise them: there is no choice left to report.
@@ -771,7 +772,7 @@ rather than run forever. A client compensating MUST stop at a limit of its own a
 `query_result_limit_exceeded` a declining server would have returned. Silent compensation turns a
 missing capability into an unexplained hang.
 
-This applies to `content`, `sharing` and `creator_attribution`, none of which a client can fake. That is
+This applies to `content`, `sharing`, `creator_attribution` and `collection_access`, none of which a client can fake. That is
 not a coincidence: an optional capability a client *can* compensate for is one where compensation
 and operation give different answers, which is the case for making it required rather than
 documenting the gap.
@@ -1150,6 +1151,41 @@ Adding a creator field to an existing type leaves it null on older records, incl
 Subsequent inserts populate it. A schema update attempting to switch an existing field to or from
 creator status is refused with `400 meta_schema_error`. A confirmed removal discards stored values
 under the normal rules. A later declaration begins with no value on existing records.
+
+### Collection fields
+
+A dataset advertising `collection_access` supports a declared text field with
+`"collection": true`. A creator field cannot also be a collection field. An
+effective type may have at most one collection field, including inherited fields.
+An invalid declaration returns `400 meta_invalid_field`. An existing field cannot
+gain or lose the marker, and a collection field cannot be removed by a schema
+update. These changes return `400 meta_schema_error`.
+
+At insertion, a caller may give the field a text value using the object identifier
+grammar. The value names a collection local to the dataset. An omitted or null
+value creates a record outside any collection. Older records stay outside a
+collection when a schema adds the field. Supplying the field in an update returns
+`400 invalid_field`, including for bulk updates with no matches.
+
+A deployment may grant read or insert independently for an exact concrete type
+and collection ID. It chooses collection IDs and the principals or audiences
+allowed to use them. An insert grant requires the submitted collection ID to
+match. A missing or different value is refused with `403 permission_denied`.
+It conveys no authority to update or delete, attach content, or read records,
+including the contributor's own inserts. Creator fields are stamped normally.
+The authorization is checked in the transaction committing the insertion.
+Ordinary type grants retain their existing authority.
+
+A collection read grant makes matching records visible as they are inserted.
+It exposes the exact type's effective schema. It applies before query filtering,
+sorting, grouping, counts and pagination, and authorizes content attached to
+visible records under the content protocol. Direct reads outside the view return
+`404 unavailable`; the same answer covers absent objects where collection
+membership cannot be proved. Collection reads compose with type and object
+grants. Object grants still apply only to direct reads. A frozen view intersects
+collection membership with its existing sequence cut. Grant changes invalidate
+affected cursors and existing expiry checks apply. Collection grants do not
+convey dataset write, schema or erase rights.
 
 ### Changing a schema
 
@@ -1874,8 +1910,8 @@ would for any lost response.
   of the resulting authorized view**. Two installations of one person may see different data, so the
   principal alone is not enough.
 - **The generation MUST change when the caller's effective access changes**, including grant
-  revocation or expiry and changes to application authorization. v1 visibility depends on grants,
-  never record fields; editing a field MUST NOT change the view generation. Otherwise an ordinary
+  revocation or expiry and changes to application authorization. Collection membership is fixed at
+  insertion. Editing a field MUST NOT change the view generation. Otherwise an ordinary
   data write would masquerade as a permission change, while a revoked grant could leave a cached
   page replayable.
 - The generation MUST be re-checked **before serving any page, including a replay of one already
@@ -2503,12 +2539,11 @@ resolution, where the question asked is a different one.
 
 #### The authorized view
 
-**Sharing is an advertised capability.** A server without it has one view per dataset, equal to the
-dataset, never returns `unavailable`, and can ignore the rest of this section. Everything below
-describes what a server advertising `sharing` owes.
+Sharing and collection access are advertised capabilities. A server offering neither has a full
+dataset view. The following rules apply to the grant kinds a server advertises.
 
-**A grant is a row**: a principal, a scope, a set of rights, and an expiry. The scope is a **type** or a
-**single object**. Grants are server-side state, created however a deployment chooses — this protocol
+**A grant is a row**: a principal, a scope, a set of rights, and an expiry. The scope is a **type**, a **single object**, or a [collection](#collection-fields) on a server
+advertising `collection_access`. Grants are server-side state, created however a deployment chooses — this protocol
 does not define a way to create one, only what an existing one means.
 
 **The owner's path is not filtered.** A caller reading its own dataset is subject to no view logic at
@@ -2521,7 +2556,7 @@ Two mechanisms are easy to confuse:
   entitled to. It is account state, set by whatever administers the deployment, and it is how an owner
   and their applications work.
 - **A grant** extends access to *another* principal, and in v1 conveys `read` or
-  [`insert`](#insert-grants), each scoped to types, and never both through one scope.
+  [`insert`](#insert-grants) within its scope. The two rights are granted independently.
 
 So a **service** authenticating with `client_credentials` is an ordinary principal: it may hold `write`
 on datasets it is entitled to — its own, or ones a deployment assigns it — and it may be granted read
@@ -2534,9 +2569,8 @@ it: if the host's service needs to record something, it does so in a dataset of 
 which is the same delivery path everything else uses. How a deployment decides who holds what is
 outside this protocol — see [the deployment contract](tessera-deployment.md).
 
-**Visibility comes from the grant table, never from field values.** This is the rule that makes the
-rest cheap: because no stored value determines who sees what, **no write can move an object into or
-out of anyone's view**, and a mutation never has to be authorized against two states.
+Visibility follows the grant table and any collection membership established at insertion.
+An update cannot move a record into or out of a collection.
 
 - **Rights are `read` and `insert` in v1.** A guest may not update or delete, and may insert only
   through an [insert grant](#insert-grants), which conveys no view. The only writer with any hold on
@@ -2544,14 +2578,14 @@ out of anyone's view**, and a mutation never has to be authorized against two st
   composing a plan, a comment on someone's record — are served by writing in one's *own* dataset and
   granting read on it, with the recipient copying what they accept. The recipient then owns it
   outright, and keeps it if the relationship ends.
-- **Queries run against type grants; object grants serve direct reads.** A guest may query a type it
-  holds a grant for, and may fetch by identity an object it holds a grant for. A query is not filtered
+- **Queries run against type and collection read grants.** A guest may query within those
+  scopes and may fetch by identity an object it holds an object grant for. A query is not filtered
   down to a scatter of individually granted objects — that would put per-row view evaluation into the
   query engine of every deployment, to serve a case that reads by identity anyway.
 - **A type grant covers only the named concrete type**, never its descendants. An existing or newly
   created subtype requires its own type grant; creating a subtype MUST NOT silently widen a guest
   view. Descendant-inclusive queries and counts intersect their type scope with the caller's exact
-  type grants before grouping, counting, pagination and limits. An object grant still authorizes
+  type and collection grants before grouping, counting, pagination and limits. An object grant still authorizes
   only direct reads and MUST NOT add rows to that intersection.
 - **Individually granted objects are therefore not discoverable through this protocol.** A recipient
   cannot query a shared type to find what was shared with them, because that type holds other
@@ -2582,7 +2616,7 @@ not change what its clients have to handle.
 #### Insert grants
 
 **An insert grant conveys no continuing authority over what was written.** It lets a principal add
-records of exactly the concrete types it names, and nothing else. What it adds belongs to the dataset
+records of exactly the concrete types and, where named, collections it grants. What it adds belongs to the dataset
 from the moment it commits: the contributor cannot read it, change it or delete it, unless some
 other grant it holds would let it do that to any record of the type — in which case that grant does,
 and the record is to it like any other.

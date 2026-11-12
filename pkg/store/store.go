@@ -27,7 +27,7 @@ type Grants struct {
 	Write     bool       `json:"write"`
 	Schema    bool       `json:"schema"`
 	Erase     bool       `json:"erase"`
-	// Insert adds records of the types the view names as insertable, and
+	// Insert adds records within the types or collections the view names, and
 	// nothing else: no read, no update, no delete, and no continuing authority
 	// over what was added, which belongs to the dataset from the moment it
 	// commits. It is separate from Write because it is the whole of what a
@@ -37,9 +37,8 @@ type Grants struct {
 
 type ObjectKey struct{ TypeID, ObjectID string }
 
-// View is a constrained identity set for this first slice. It cannot carry SQL
-// or executable host policy. The zero value is invalid, not unrestricted.
-// Row predicates and policy hooks require a later, explicitly tested extension.
+// View carries exact type, object and collection scopes. The zero value is
+// invalid. Scope descriptors contain data only.
 type View struct {
 	initialized, full bool
 	objects           map[ObjectKey]struct{}
@@ -47,8 +46,9 @@ type View struct {
 	// inserts are the concrete types an Insert grant may add to. They are
 	// not part of what the view shows: adding to a type conveys no sight of
 	// it, which is why they are kept apart from types rather than merged in.
-	inserts     map[string]struct{}
-	sequenceCut uint64
+	inserts                            map[string]struct{}
+	sequenceCut                        uint64
+	readCollections, insertCollections []CollectionScope
 }
 
 func FullView() View { return View{initialized: true, full: true} }

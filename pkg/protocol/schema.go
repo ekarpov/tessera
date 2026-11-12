@@ -29,6 +29,7 @@ type Field struct {
 	Immutable bool `json:"immutable,omitempty"`
 	// Creator marks a text field populated by the server from the authenticated
 	// principal on insert. A caller cannot supply or change its value.
+	Collection  bool                       `json:"collection,omitempty"`
 	Creator     bool                       `json:"creator,omitempty"`
 	Roles       []string                   `json:"roles,omitempty"`
 	Annotations map[string]json.RawMessage `json:"annotations,omitempty"`
@@ -80,7 +81,7 @@ func (m Meta) ValidateDeclared() error {
 		if err := f.validateScale(); err != nil {
 			return err
 		}
-		if f.Creator && f.Type != TextType {
+		if (f.Creator || f.Collection) && f.Type != TextType || f.Creator && f.Collection {
 			return invalid("meta_invalid_field")
 		}
 		if f.MetaID != m.ID || seen[f.ID] {
@@ -124,12 +125,14 @@ func EffectiveMetadata(types map[string]Meta, id string) (Meta, error) {
 	}
 	fields := make([]Field, 0)
 	ids := map[string]bool{}
+	hasCollection := false
 	for i := len(chain) - 1; i >= 0; i-- {
 		for _, field := range chain[i].Fields {
-			if ids[field.ID] {
+			if ids[field.ID] || field.Collection && hasCollection {
 				return Meta{}, invalid("meta_invalid_field")
 			}
 			ids[field.ID] = true
+			hasCollection = hasCollection || field.Collection
 			field.Roles = append([]string(nil), field.Roles...)
 			if field.Annotations != nil {
 				annotations := map[string]json.RawMessage{}

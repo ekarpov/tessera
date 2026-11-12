@@ -143,6 +143,9 @@ func (s *Store) load(ctx context.Context, tx *sql.Tx, a store.Access, dataset st
 	if h.managed, err = s.loadManaged(ctx, tx, dataset, managedKey.String, cacheKey, image.Types); err != nil {
 		return h, err
 	}
+	if h.auth.View.HasCollectionReads() && !h.auth.View.Full() {
+		h.managed.collections = &collectionScan{view: h.auth.View, types: image.Types}
+	}
 	if !objects {
 		return h, nil
 	}

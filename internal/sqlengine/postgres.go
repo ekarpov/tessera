@@ -152,10 +152,10 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 16 && version != 17 {
+	} else if version != 16 && version != 17 && version != 18 {
 		return nil, store.Refuse("not_supported")
 	}
-	if version != 0 && version != 17 {
+	if version != 0 && version < 17 {
 		if _, err = tx.ExecContext(ctx, migrations.PostgresCreatorUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
@@ -163,6 +163,11 @@ func openPostgres(ctx context.Context, dsn, fencePath string, limits p.Limits, r
 			if err = carryCreatorSecret(ctx, tx); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if version != 0 && version < 18 {
+		if _, err = tx.ExecContext(ctx, `UPDATE "tessera_migration" SET "version" = 18`); err != nil {
+			return nil, dbError(ctx, err)
 		}
 	}
 	var bounds p.Limits

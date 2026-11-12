@@ -29,7 +29,7 @@ func TestContentImportAttachmentAndRetirement(t *testing.T) {
 }
 
 func checkContentAttachmentRetirement(t *testing.T, typed bool) {
-	s, _, dataset := fixture(t)
+	s, source, dataset := fixture(t)
 	if err := s.EnableContent(t.Context(), filepath.Join(t.TempDir(), "bytes")); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,8 @@ func checkContentAttachmentRetirement(t *testing.T, typed bool) {
 		t.Fatal("lost response duplicated import")
 	}
 	if err = s.Transact(t.Context(), owner, sole(t, s), func(tx store.Tx) error {
-		_, e := tx.CreateMetadata(p.Meta{ID: "test.media", Fields: []p.Field{{ID: "photo", MetaID: "test.media", Type: p.MediaType}}})
+		_, e := tx.CreateMetadata(p.Meta{ID: "test.media", Fields: []p.Field{{ID: "photo", MetaID: "test.media", Type: p.MediaType},
+			{ID: "membership", MetaID: "test.media", Type: p.TextType, Collection: true}}})
 		return e
 	}); err != nil {
 		t.Fatal(err)
@@ -77,9 +78,10 @@ func checkContentAttachmentRetirement(t *testing.T, typed bool) {
 		}
 	}
 	ref, _ := p.NewValue(p.MediaType, contentID+"//"+item)
+	member, _ := p.NewValue(p.TextType, "alpha")
 	var object string
 	if err = s.Transact(t.Context(), owner, sole(t, s), func(tx store.Tx) error {
-		r, e := tx.Insert("test.media", map[string]p.Value{"photo": ref})
+		r, e := tx.Insert("test.media", map[string]p.Value{"photo": ref, "membership": member})
 		if e == nil {
 			object = r.Records[0].ID.ID
 		}
@@ -104,6 +106,77 @@ func checkContentAttachmentRetirement(t *testing.T, typed bool) {
 	}
 	if _, err = s.ContentControl(t.Context(), guest, "resolve", contentID, "unknown", []byte(`{"representation":"original"}`)); p.ErrorCode(err) != "unavailable" {
 		t.Fatal("item existence leaked", err)
+	}
+	install := func(collection string, cut uint64, insert bool) {
+		t.Helper()
+		scopes := []store.CollectionScope{{TypeID: "test.media", ID: collection}}
+		var readScopes, insertScopes []store.CollectionScope
+		if insert {
+			insertScopes = scopes
+		} else {
+			readScopes = scopes
+		}
+		view, err := store.SharedView(nil).WithCollections(readScopes, insertScopes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grant := store.Authorization{View: view.BeforeSequence(cut), Grants: store.Grants{Read: !insert, Insert: insert}}
+		if err = s.SetAuthorization(t.Context(), dataset, guest, grant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolve := func(engine *Store) error {
+		_, err := engine.ContentControl(t.Context(), guest, "resolve", contentID, item, []byte(`{"representation":"original"}`))
+		return err
+	}
+	for _, hidden := range []struct {
+		id  string
+		cut uint64
+	}{{"beta", 0}, {"alpha", 1}} {
+		install(hidden.id, hidden.cut, false)
+		if err = resolve(s); p.ErrorCode(err) != "unavailable" {
+			t.Fatal("collection view disclosed bytes outside its scope", err)
+		}
+	}
+	install("alpha", 0, true)
+	if err = s.Transact(t.Context(), guest, dataset, func(tx store.Tx) error {
+		_, err := tx.Insert("test.media", map[string]p.Value{"photo": ref, "membership": member})
+		return err
+	}); p.ErrorCode(err) != "permission_denied" {
+		t.Fatal("scoped insert attached content", err)
+	}
+	install("alpha", 0, false)
+	if err = s.Read(t.Context(), guest, dataset, func(tx store.Tx) error {
+		set, err := tx.Query("test.media", p.Query{}, 10)
+		if err == nil && (len(set.Records) != 1 || set.Records[0].ID.ID != object) {
+			t.Fatal("collection query lost its attached record")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = resolve(s); err != nil {
+		t.Fatal("a collection reader could not resolve attached bytes", err)
+	}
+	dir := t.TempDir()
+	archive, destination, files := filepath.Join(dir, "snapshot.enc"), filepath.Join(dir, "restored.db"), filepath.Join(dir, "bytes")
+	key := make([]byte, 32)
+	if err = s.Backup(t.Context(), archive, key); err != nil {
+		t.Fatal(err)
+	}
+	if err = RestoreBackup(t.Context(), archive, destination, files, source+".retired", key); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(t.Context(), destination, p.DevelopmentLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err = restored.EnableContent(t.Context(), files); err != nil {
+		t.Fatal(err)
+	}
+	if err = resolve(restored); err != nil {
+		t.Fatal("restore lost collection access to attached bytes", err)
 	}
 	if err = s.SetAuthorization(t.Context(), sole(t, s), owner, store.Authorization{Grants: store.Grants{Read: true, Write: true, Schema: true, Erase: true}, View: store.FullView()}); err != nil {
 		t.Fatal(err)

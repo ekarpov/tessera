@@ -52,9 +52,10 @@ func managedColumn(index int) string { return `"c` + strconv.Itoa(index) + `"` }
 type managedMapping map[string][]installedLayout
 
 type managedPlan struct {
-	mapping managedMapping
-	values  string
-	source  string
+	mapping     managedMapping
+	values      string
+	source      string
+	collections *collectionScan
 }
 
 type managedCache struct {

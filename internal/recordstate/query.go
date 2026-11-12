@@ -15,7 +15,7 @@ func (t *transaction) Query(typeID string, q p.Query, limit int) (p.RecordSet, e
 	if limit < 1 || limit > limits.MaxOverallLimit {
 		return p.RecordSet{}, store.Refuse("query_result_limit_exceeded")
 	}
-	if !t.auth.View.AllowsType(typeID) {
+	if !t.auth.View.AllowsQueryType(typeID) {
 		return p.RecordSet{}, store.Refuse("permission_denied")
 	}
 	meta, err := t.effective(typeID)

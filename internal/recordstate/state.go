@@ -225,6 +225,7 @@ func (s *Store) authorization(a store.Access) (store.Authorization, error) {
 	if !a.Valid() || !ok || !grant.View.Valid() || grant.Grants.ExpiresAt != nil && !time.Now().Before(*grant.Grants.ExpiresAt) {
 		return store.Authorization{}, store.Refuse("permission_denied")
 	}
+	grant.View = grant.View.WithCollectionRights(grant.Grants)
 	return grant, nil
 }
 
@@ -283,7 +284,7 @@ func (s *Store) Info(ctx context.Context, a store.Access, dataset string) (store
 		expiry := *access.ExpiresAt
 		access.ExpiresAt = &expiry
 	}
-	capabilities := s.ReadCapabilities()
+	capabilities := append(s.ReadCapabilities(), p.CollectionAccessCapability)
 	if s.limits.MaxTextBytes >= p.CreatorIDBytes {
 		capabilities = append(capabilities, p.CreatorAttributionCapability)
 	}
@@ -649,10 +650,12 @@ func (t *transaction) lookup(typeID, id string) (object, error) {
 		return object{}, err
 	}
 	// No schema or object existence check may precede the view decision.
-	if !t.auth.View.Allows(store.ObjectKey{TypeID: typeID, ObjectID: id}) {
+	key := store.ObjectKey{TypeID: typeID, ObjectID: id}
+	collectionOnly := !t.auth.View.Allows(key)
+	if collectionOnly && !t.auth.View.AllowsQueryType(typeID) {
 		return object{}, store.Refuse("unavailable")
 	}
-	if _, ok := t.state.types[typeID]; !ok && t.auth.View.SequenceCut() == 0 {
+	if _, ok := t.state.types[typeID]; !ok && !collectionOnly && t.auth.View.SequenceCut() == 0 {
 		return object{}, store.Refuse("meta_type_not_found")
 	}
 	o, ok := t.state.objects[id]
@@ -694,6 +697,13 @@ func (t *transaction) lookup(typeID, id string) (object, error) {
 			t.state.objects[id] = object{sequence: o.sequence, typeID: o.typeID, fields: cloneFields(o.fields)}
 			o = t.state.objects[id]
 		}
+	}
+	if collectionOnly {
+		if !ok || o.typeID != typeID ||
+			!t.auth.View.AllowsCollectionRecord(key, o.sequence, CollectionID(t.state.types, typeID, o.fields)) {
+			return object{}, store.Refuse("unavailable")
+		}
+		return o, nil
 	}
 	if t.auth.View.SequenceCut() != 0 {
 		sequence := o.sequence
@@ -768,7 +778,7 @@ func (t *transaction) record(typeID, id string, o object, fields []string, inclu
 // convertDeclared fills creator fields on insert and reports which supplied
 // fields are immutable for updates.
 func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, inserting bool) (map[string]p.Value, map[string]bool, error) {
-	if !t.auth.View.AllowsType(typeID) && !t.auth.View.AllowsInsert(typeID) {
+	if !t.auth.View.AllowsQueryType(typeID) && !t.auth.View.AllowsInsertType(typeID) {
 		return nil, nil, store.Refuse("permission_denied")
 	}
 	meta, err := t.effective(typeID)
@@ -799,12 +809,21 @@ func (t *transaction) convertDeclared(typeID string, fields map[string]p.Value, 
 	var immutable map[string]bool
 	for id, v := range fields {
 		declared, ok := byID[id]
-		if !ok || declared.Creator {
+		if !ok || declared.Creator || declared.Collection && !inserting {
 			return nil, nil, store.Refuse("invalid_field")
 		}
+		if declared.Collection && v.Type() != p.NullType &&
+			(v.Type() != p.TextType || p.ValidateIdentifier(p.ObjectIdentifier, v.Payload().(string)) != nil) {
+			return nil, nil, store.Refuse("invalid_field_value")
+		}
 		kind := declared.Type
-		if kind == p.MediaType && v.Type() != p.NullType && t.engine.mediaAuthority == nil {
-			return nil, nil, store.Refuse("not_supported")
+		if kind == p.MediaType && v.Type() != p.NullType {
+			if inserting && !t.auth.Grants.Write && !t.auth.View.AllowsInsert(typeID) {
+				return nil, nil, store.Refuse("permission_denied")
+			}
+			if t.engine.mediaAuthority == nil {
+				return nil, nil, store.Refuse("not_supported")
+			}
 		}
 		converted, err := v.Convert(kind, t.engine.limits)
 		if err != nil {
@@ -847,7 +866,8 @@ func (t *transaction) Insert(typeID string, fields map[string]p.Value) (result p
 	// a descendant, for the reason a type grant never covers one. Identity-set
 	// views still cannot authorize a newly minted identity on their own.
 	owner := t.auth.Grants.Write && t.auth.View.Full()
-	if !owner && !(t.auth.Grants.Insert && t.auth.View.AllowsInsert(typeID)) {
+	if !owner && !(t.auth.Grants.Insert && (t.auth.View.AllowsInsert(typeID) ||
+		t.auth.View.AllowsCollectionInsert(typeID, CollectionID(t.state.types, typeID, fields)))) {
 		return result, store.Refuse("permission_denied")
 	}
 	converted, _, err := t.convertDeclared(typeID, fields, true)
@@ -1129,7 +1149,7 @@ func (t *transaction) readable(typeID string, predicate *p.Predicate, sc reach) 
 	if err := t.check(t.auth.Grants.Read || t.auth.Grants.Write); err != nil {
 		return nil, err
 	}
-	if !t.auth.View.AllowsType(typeID) {
+	if !t.auth.View.AllowsQueryType(typeID) {
 		return nil, store.Refuse("permission_denied")
 	}
 	meta, err := t.effective(typeID)
@@ -1147,7 +1167,7 @@ func (t *transaction) readable(typeID string, predicate *p.Predicate, sc reach) 
 		if sc.types != nil && !sc.types[id] {
 			continue
 		}
-		if !t.auth.View.Full() && !t.auth.View.AllowsType(id) {
+		if !t.auth.View.AllowsQueryType(id) {
 			continue
 		}
 		readable[id] = true
@@ -1166,7 +1186,10 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 	// matched. Stopping is the caller's decision, because only the streaming
 	// path reads in the order that makes stopping correct.
 	consider := func(id string, o object) (bool, error) {
-		if !t.auth.View.AllowsSequence(store.ObjectKey{TypeID: o.typeID, ObjectID: id}, o.sequence) {
+		key := store.ObjectKey{TypeID: o.typeID, ObjectID: id}
+		view := t.auth.View
+		if !view.AllowsSequence(key, o.sequence) &&
+			!(view.HasCollectionReads() && view.AllowsCollectionRecord(key, o.sequence, CollectionID(t.state.types, o.typeID, o.fields))) {
 			return false, nil
 		}
 		scanned++
@@ -1343,10 +1366,13 @@ func (t *transaction) UpdateMetadata(m p.Meta, confirm string) (result p.Meta, e
 	for _, f := range previous.Fields {
 		now, ok := current[f.ID]
 		if !ok {
+			if f.Collection {
+				return result, store.Refuse("meta_schema_error")
+			}
 			removed = append(removed, f.ID)
 			continue
 		}
-		if now.Type != f.Type || now.Creator != f.Creator {
+		if now.Type != f.Type || now.Creator != f.Creator || now.Collection != f.Collection {
 			return result, store.Refuse("meta_schema_error")
 		}
 		// A scale may be widened and never narrowed. Widening costs nothing

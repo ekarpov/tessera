@@ -9,6 +9,7 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -390,18 +391,47 @@ func (s *Store) contentItem(ctx context.Context, tx *sql.Tx, a store.Access, aut
 		// own. A share of one dataset then let its type allowance be applied
 		// to an object in a dataset the reader cannot reach at all, which
 		// turned somebody else's record into a key to these bytes.
-		rows, err := tx.QueryContext(ctx, `SELECT "object_id","type_id" FROM "tessera_attachments" WHERE "dataset_id"=$1 AND "store_id"=$2 AND "item_id"=$3`, owning, storeID, id)
+		query := `SELECT a."object_id",a."type_id" FROM "tessera_attachments" a`
+		var types map[string]p.Meta
+		if auth.View.HasCollectionReads() {
+			h, err := s.load(ctx, tx, a, owning, false)
+			if err != nil {
+				return nil, err
+			}
+			types = h.image.Types
+			query = `SELECT a."object_id",a."type_id",o."fields" FROM "tessera_attachments" a JOIN ` +
+				h.managed.source + ` AS o ON o."dataset_id"=a."dataset_id" AND o."object_id"=a."object_id" AND o."type_id"=a."type_id"`
+		}
+		rows, err := tx.QueryContext(ctx, query+` WHERE a."dataset_id"=$1 AND a."store_id"=$2 AND a."item_id"=$3`, owning, storeID, id)
 		if err != nil {
 			return nil, dbError(ctx, err)
 		}
 		visible := false
 		for rows.Next() {
 			var k store.ObjectKey
-			if err = rows.Scan(&k.ObjectID, &k.TypeID); err != nil {
+			var raw []byte
+			if types != nil {
+				err = rows.Scan(&k.ObjectID, &k.TypeID, &raw)
+			} else {
+				err = rows.Scan(&k.ObjectID, &k.TypeID)
+			}
+			if err != nil {
 				break
 			}
 			if recordstate.Visible(auth.View, k.TypeID, k.ObjectID) {
 				visible = true
+				break
+			}
+			if types != nil && auth.View.AllowsQueryType(k.TypeID) {
+				var row recordstate.Row
+				if err = decodeStoredFields(raw, &row); err != nil {
+					break
+				}
+				sequence, _ := strconv.ParseUint(k.ObjectID, 10, 64)
+				if auth.View.AllowsCollectionRecord(k, sequence, recordstate.CollectionID(types, k.TypeID, row.Fields)) {
+					visible = true
+					break
+				}
 			}
 		}
 		if err == nil {

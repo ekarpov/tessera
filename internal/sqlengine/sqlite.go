@@ -214,10 +214,10 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 		if err = s.migrateRecordFields(ctx, tx); err != nil {
 			return nil, err
 		}
-	} else if version != 18 && version != 19 {
+	} else if version != 18 && version != 19 && version != 20 {
 		return nil, store.Refuse("not_supported")
 	}
-	if version != 0 && version != 19 {
+	if version != 0 && version < 19 {
 		if _, err = tx.ExecContext(ctx, migrations.SQLiteCreatorUpgrade); err != nil {
 			return nil, dbError(ctx, err)
 		}
@@ -225,6 +225,11 @@ func Open(ctx context.Context, path string, limits p.Limits) (result *Store, err
 			if err = carryCreatorSecret(ctx, tx); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if version != 0 && version < 20 {
+		if _, err = tx.ExecContext(ctx, `PRAGMA user_version = 20`); err != nil {
+			return nil, dbError(ctx, err)
 		}
 	}
 	var bounds p.Limits
@@ -359,7 +364,18 @@ func (s *Store) Revoke(ctx context.Context, dataset string, a store.Access) erro
 		return err
 	}
 	defer s.life.RUnlock()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM "tessera_access" WHERE "dataset_id"=$1 AND "principal"=$2 AND "authorization"=$3`, dataset, a.Principal, a.Authorization); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return dbError(ctx, err)
+	}
+	defer tx.Rollback()
+	if err = s.serializeWrites(ctx, tx, dataset); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM "tessera_access" WHERE "dataset_id"=$1 AND "principal"=$2 AND "authorization"=$3`, dataset, a.Principal, a.Authorization); err != nil {
+		return dbError(ctx, err)
+	}
+	if err = tx.Commit(); err != nil {
 		return dbError(ctx, err)
 	}
 	return nil
@@ -387,7 +403,7 @@ func authorization(ctx context.Context, tx *sql.Tx, dataset string, a store.Acce
 	if json.Unmarshal(view, &v) != nil {
 		return store.Authorization{}, store.Refuse("internal_error")
 	}
-	return store.Authorization{Grants: g, View: v}, nil
+	return store.Authorization{Grants: g, View: v.WithCollectionRights(g)}, nil
 }
 
 // Datasets lists every dataset in this storage that the caller holds a grant
@@ -669,6 +685,9 @@ func (s *Store) scanObjectsWhere(ctx context.Context, tx *sql.Tx, dataset string
 		identity = `"object_id" COLLATE "C"`
 	}
 	scope := `"dataset_id"=$1 AND "type_id" IN (` + strings.Join(placeholders, ",") + ")"
+	if managed.collections != nil {
+		scope += managed.collections.condition(types, managed.values, &args)
+	}
 	for _, predicate := range predicates {
 		table, column, where := managed.values+" AS v", `"number"`, `"dataset_id"=$1 AND "kind"='integer'`
 		if layout, fieldColumn, ok := managed.mapping.field(types, predicate.Field, p.IntegerType); ok {
