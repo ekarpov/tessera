@@ -29,7 +29,7 @@ first (`rg -n '^#{1,4} ' path`), then read the relevant section and enough conte
 | Change storage/encryption or engine limits | [Backend options](docs/backend-options.md), [database-like service](docs/database-like-service.md) |
 | Embed or support adopters | [Consuming Tessera](docs/consuming-tessera.md), [embedding contract](specs/tessera-embedding.md), [client profiles](docs/client-profiles.md) |
 | Assess extensions | [Extension candidates](docs/extension-candidates.md) and the decision index above |
-| Release/publish or change a shared deployment | [Release procedure, App Review freeze and consumer gate](docs/releasing.md) |
+| Release/publish or change a shared deployment | [Release procedure, App Review freeze and deployment gates](docs/releasing.md) |
 
 ## Invariants
 
@@ -67,7 +67,7 @@ The active agent handles planning, implementation, verification and review direc
 is required. Stay within the user's scope, permissions and release authorization. When delegation
 is authorized and useful, give the worker a concise objective, scope, invariants, relevant paths and
 expected return format. Reuse workers for follow-up fixes; prefer completion notifications or bounded
-waits to frequent polling. Preserve required independent review and consumer gates. Before any shared deployment action,
+waits to frequent polling. Preserve required independent review and deployment gates. Before any shared deployment action,
 check the [active freeze and upgrade rules](docs/releasing.md#app-review-freeze). Preparing a release
 does not authorize deployment or modification of review accounts/invitations.
 

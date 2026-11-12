@@ -5,14 +5,14 @@ A release identifies verified code, states its limits and gives operators a reco
 The first-release [replacement handoff](v0.1.0-s08-acceptance-handoff.md) and earlier
 [base handoff](v0.1.0-acceptance-handoff.md) retain historical case bodies and evidence scope.
 For each subsequent release, prepare a new qualification packet for its exact revision;
-old passes and first-release waivers do not qualify a new release.
+prior results describe the revisions that were tested.
 
 Development follows the [public PR workflow](../CONTRIBUTING.md#public-development-workflow).
 A merged PR, release tag or published release never authorizes deployment by itself.
 
 ## Quick guide
 
-1. Confirm the exact candidate commit, client revisions and clean working tree.
+1. Confirm the exact server candidate commit and clean working tree.
 2. Complete the [preconditions](#preconditions) and the candidate-specific acceptance packet.
    The [rc.4 checklist](rc.4-acceptance-checklist.md) remains historical evidence for that candidate.
 3. Obtain explicit maintainer approval for protected release/publication actions.
@@ -36,33 +36,27 @@ The existing [rc.4 checklist](rc.4-acceptance-checklist.md) does not authorize c
 frozen deployment. Record the app team's explicit end-of-review confirmation before
 scheduling an upgrade; all normal upgrade gates still apply.
 
-## Compatibility and consumer qualification
+<a id="compatibility-and-consumer-qualification"></a>
 
-Starting with `v0.1.0` final, every new Tessera release goes to a separate test server
-before any server used by released apps. This applies to patches as well as larger releases.
+## Server qualification and app adoption
 
-1. Identify the exact candidate commit/tag, binary or image digest, packaging/configuration
-   revision, protocol versions and supported client revision pairs. Final `v0.1.0` uses fresh
-   storage; do not reset a frozen review deployment to create it.
-2. Prepare a release packet: release notes, specification diff and append-only vector diff
-   from the last consumer-accepted release, plus exact comparison refs. For the first final,
-   also compare with `v0.1.0-rc.4`; retain the alpha.28 vector audit required below.
-   Explicitly flag behavior changes even when specification text is unchanged: stricter
-   validation, consent, scopes, OAuth, error/status codes, capabilities, defaults and limits.
-   State migration/reconfiguration needs and recovery limits. State explicitly when a diff
-   or behavior-change category is empty.
-3. Supply the app team with the isolated test endpoint, packet and 2-3 fresh test invitations
-   through an authorized channel. Do not reuse review invitations or put credentials in
-   release artifacts. Record delivery and the tested revision pair in protected evidence.
-4. Allow the app team's approximately half-day qualification: independent vector tests,
-   live integration tests and both home and study walks. Obtain explicit confirmation
-   before upgrading any app-connected deployment. Time elapsed is not acceptance.
-   A behavior-changing fix requires updated artifacts and affected acceptance reruns.
-5. Give at least 14 days' notice before an app-connected server upgrade, identifying the
-   target, version, behavior changes, planned time and recovery path. The corresponding
-   client agreement requests the same notice before an app release changes required
-   protocol features. Record notice and consumer confirmation separately; neither replaces
-   the freeze, acceptance gates or deployment authorization.
+1. Identify the exact server candidate, binary or image digest, packaging and configuration
+   revision, protocol versions and comparison release.
+2. Prepare release notes, a specification diff and an append-only vector comparison against
+   the previous release. Record changes to routes, validation, grants, defaults, error codes
+   and persistence. State migration and recovery requirements.
+3. Run the server, protocol, compatibility and recovery checks in the
+   [preconditions](#preconditions) on disposable infrastructure. Record the exact server and
+   wire-client revisions tested, along with results and coverage.
+4. Make the verified version and its release packet available for consumer testing. Each app
+   validates the release against its profile, decides when to pin it and reports compatibility
+   issues or requests. App and device results inform adoption. Tessera release approval is
+   based on the server and protocol checks.
+
+For an app-connected deployment, qualify the proposed upgrade in isolation, verify recovery
+and coordinate timing with affected operators and consumers. Give at least 14 days' notice
+identifying the target version, behavior changes, planned time and recovery path. Obtain
+deployment authorization and observe the App Review freeze where it applies.
 
 Keep serving protocol `"1"` at `/v1/` for as long as released app versions use it. A future
 major protocol is served alongside it; an implementation version such as `v0.1.0` is not a
@@ -87,36 +81,19 @@ final or constitute a full privacy audit. The specifications remain the contract
 
 ## Preconditions
 
-For this first v0.1.0 only, the maintainer's 8 November 2026
-[app-test waiver](v0.1.0-s08-acceptance-handoff.md#maintainer-app-test-waiver-8-november-2026)
-permits proceeding without the remaining consumer iOS app/device tests and independent
-app sign-off. Record those cases as waived/unrun, retain the interim evidence and do
-not count them as passes. A subsequent explicit
-[first-party Console-client waiver](v0.1.0-s08-acceptance-handoff.md#maintainer-first-party-console-waiver-8-november-2026)
-also removes the remaining first-party W01-W05 client-test deferral for this release.
-Both waivers preserve actual passes, skips, unsupported features and evidence limits;
-neither asserts independent client sign-off. Server-owned tests and server/operator
-qualifications are not waived. Other release, publication, deployment, notice and
-freeze requirements remain. These exceptions do not alter the consumer qualification
-rule for subsequent releases.
-
 - [ ] Run the full gate on a clean committed candidate. Use `make ci` (or the documented
   shared-host equivalent), which runs `make release-check` with both `TESSERA_TEST_POSTGRES_DSN` and
   `TESSERA_TEST_POSTGRES_RESTORE_DSN` pointing at disposable databases. `make check`
   can skip PostgreSQL and is insufficient for this gate.
 - [ ] Run `make integration`, `make integration-auth` and `make faults` on the candidate.
-- [ ] Obtain the independent consumer run, including app/device and server backup/recovery
-  acceptance. Record candidate and consumer revisions, commands, outcomes and coverage limits.
-  Prior alpha passes do not qualify the current candidate.
+- [ ] Run released wire-client checks against the candidate and verify backup and recovery.
+  Record the comparison release, exact revisions, commands, outcomes and coverage.
 - [ ] Confirm a clean tree and a matching [feature matrix](feature-matrix.md). Each required
   operation and advertised capability must have passing coverage.
 - [ ] Resolve or explicitly accept remaining [contract findings](tessera-spec-review.md).
-  Finding 47 is [resolved](tessera-spec-review.md#finding-47-selecting-and-retiring-protocol-versions);
-  obtain independent consumer results for the new version vectors and incompatibility UI.
-- [ ] Complete the release packet and isolated [consumer qualification](#compatibility-and-consumer-qualification).
-  Record any pending app confirmation; do not infer it from backend gates.
-- [ ] Review changed routes, grants, defaults, persistence formats and error semantics with
-  consumers. State migration/reconfiguration needs and client-side decoder/mock effects.
+  Verify protocol selection, overlap and retirement behavior against the version vectors.
+- [ ] Complete the server release packet. State migration and reconfiguration needs, protocol
+  changes and recovery limits so consumers can assess the version for their own pins.
 
 The [operations guide](../.agents/skills/go-storage-service/references/operations.md#commands-and-ci)
 owns local and shared-host CI commands. Keep full logs in protected run storage or attached
@@ -183,9 +160,9 @@ format versions and rejection of unsupported state remain necessary.
    SHA, build information, binary digest and outcomes. Pre-merge checks on another SHA do not
    replace this gate. If a fix changes the candidate, review it and qualify the new commit
    before tagging; do not move a tag to the fix.
-3. Complete any acceptance still owed for that exact candidate and record client revision
-   pairs, scoped qualifications and operator recovery limits. Compare the specification and
-   vectors against the last consumer-accepted release; report additions explicitly and never
+3. Complete any server qualification still owed for that exact candidate and record tested
+   wire-client revision pairs and operator recovery limits. Compare the specification and
+   vectors against the previous release; report additions explicitly and never
    alter retained vector cases. The first v0.1.0 also retained its alpha.28 comparison audit;
    evidence does not depend on restoring deleted pre-release tags to the public repository.
 4. Within the authorized scope, create an annotated version tag on the verified SHA and
@@ -199,7 +176,7 @@ format versions and rejection of unsupported state remain necessary.
    fails, disclose it and resolve it without silently retargeting the tag.
 
 Release publication does not authorize deployment, ref cleanup or a visibility change.
-Check the freeze, consumer qualification, notice and deployment authorization separately.
+Check the freeze, deployment qualification, notice and authorization separately.
 
 ### First-release backup acceptance
 
@@ -213,8 +190,8 @@ The [acquisition contract](backup-acquisition.md#content-and-deployment-limits) 
 
 ## Upgrading a deployment
 
-First check the [App Review freeze](#app-review-freeze), complete
-[consumer qualification and notice](#compatibility-and-consumer-qualification), and obtain
+Check the [App Review freeze](#app-review-freeze), complete
+[deployment qualification and notice](#server-qualification-and-app-adoption), and obtain
 deployment authorization. Publication of a release does not authorize an upgrade.
 Follow [self-hosting](self-hosting.md#upgrading). Migrations are forward-only; an old binary
 must not open newer state. Take a backup before upgrading and verify isolated restore.

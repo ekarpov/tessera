@@ -8,8 +8,7 @@ are not capabilities and cannot be switched off.
 Run the suites yourself rather than trusting the table; the entry point is at the bottom.
 
 For a local server, follow [SQLite development](sqlite-development.md). For operator
-configuration and OAuth behavior, use [self-hosting](self-hosting.md). Independent
-app/device and server acceptance remains in the [S08 replacement handoff](v0.1.0-s08-acceptance-handoff.md).
+configuration and OAuth behavior, use [self-hosting](self-hosting.md). See the [release procedure](releasing.md) for server qualification and app adoption.
 
 ## Required surface
 
@@ -47,6 +46,7 @@ Naming one in `optional_reads` fails at startup rather than being accepted and i
 | `creator_scoped_mutations` | Implemented, creator-scoped updates and deletes | Hosts supply scopes through `store.View.WithOwnMutations` |
 | `creator_attribution` | Implemented, opt-in creator text fields | Advertised when the dataset admits 32-byte text values |
 | `content` | Implemented, filesystem bytes | `content` in the configuration |
+| `scoped_attachment_writes` | Implemented, target-bound imports for collection inserts and creator-scoped updates | Advertised with `content` |
 | `thumbnails` | Implemented, computed per read and never stored | Advertised with `content` |
 | `current_representation` | **Not implemented** | — |
 | `ranges` | **Not implemented** | — |
