@@ -1173,13 +1173,15 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 	}
 	result := []store.ObjectKey{}
 	scanned := 0
+	view := &t.auth.View
+	full := view.Full()
 	// consider charges one row against the scan bound and reports whether it
 	// matched. Stopping is the caller's decision, because only the streaming
 	// path reads in the order that makes stopping correct.
 	consider := func(id string, o object) (bool, error) {
 		key := store.ObjectKey{TypeID: o.typeID, ObjectID: id}
-		view := t.auth.View
-		if !(view.AllowsType(o.typeID) && view.AllowsSequence(key, o.sequence)) &&
+		if !full &&
+			!(view.AllowsType(o.typeID) && view.AllowsSequence(key, o.sequence)) &&
 			!(view.HasCollectionReads() && view.AllowsCollectionRecord(key, o.sequence, CollectionID(t.state.types, o.typeID, o.fields))) {
 			return false, nil
 		}
@@ -1195,7 +1197,7 @@ func (t *transaction) scanFor(typeID string, predicate *p.Predicate, ordered boo
 			return false, e
 		}
 		if match {
-			result = append(result, store.ObjectKey{TypeID: o.typeID, ObjectID: id})
+			result = append(result, key)
 		}
 		return match, nil
 	}
