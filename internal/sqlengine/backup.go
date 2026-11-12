@@ -3,6 +3,7 @@ package sqlengine
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -338,7 +339,14 @@ func (s *Store) backupCaptured(ctx context.Context, path string, key []byte, fre
 	_ = tx.Rollback()
 	var plain bytes.Buffer
 	archive := zip.NewWriter(&plain)
+	// The manifest is repetitive structured data. Fast DEFLATE avoids spending
+	// the backup window searching for small additional compression gains.
+	archive.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(w, flate.BestSpeed)
+	})
 	entry, err := archive.Create("manifest.json")
+	// Content and host files keep the standard ZIP compression policy.
+	archive.RegisterCompressor(zip.Deflate, nil)
 	if err != nil {
 		return err
 	}
